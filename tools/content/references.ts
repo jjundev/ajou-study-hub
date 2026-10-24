@@ -3,8 +3,11 @@ import postcss from "postcss";
 import valueParser from "postcss-value-parser";
 // Srcset URLs extend through commas until whitespace; only trailing commas
 // terminate a candidate without descriptors. This preserves data URL payloads.
-function srcsetReferences(value: string): string[] {
-  const urls: string[] = [];
+export function mapSrcset(
+  value: string,
+  rewrite: (url: string) => string,
+): string {
+  const replacements: { start: number; end: number; value: string }[] = [];
   const space = (char: string) => /[\t\n\f\r ]/.test(char);
   let position = 0;
   while (position < value.length) {
@@ -18,7 +21,12 @@ function srcsetReferences(value: string): string[] {
     const token = value.slice(start, position);
     if (!token) break;
     const url = token.replace(/,+$/, "");
-    if (url) urls.push(url);
+    if (url)
+      replacements.push({
+        start,
+        end: start + url.length,
+        value: rewrite(url),
+      });
     if (token.endsWith(",")) continue;
     // Descriptors may contain parentheses; commas inside them are not separators.
     let parentheses = 0;
@@ -29,7 +37,17 @@ function srcsetReferences(value: string): string[] {
       else if (char === "," && parentheses === 0) break;
     }
   }
-  return urls;
+  for (const r of replacements.reverse())
+    value = value.slice(0, r.start) + r.value + value.slice(r.end);
+  return value;
+}
+function srcsetReferences(value: string): string[] {
+  const refs: string[] = [];
+  mapSrcset(value, (url) => {
+    refs.push(url);
+    return url;
+  });
+  return refs;
 }
 export function extractReferences(
   text: string,

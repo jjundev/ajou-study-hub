@@ -39,6 +39,7 @@ export type SourceSnapshot = {
 export async function inspectSources(
   configs: CourseConfig[],
   settings: SourceSettings,
+  options: { batchTracking?: boolean } = {},
 ): Promise<SourceSnapshot> {
   const provenance: SourceProvenance[] = [];
   const catalogInputs: SourceEntry[] = [];
@@ -141,7 +142,7 @@ export async function inspectSources(
         !s.config.allowedRoots.some((r) => p === r || p.startsWith(r + "/"))
       )
         throw new Error(`Source not allowed: ${p}`);
-      if (!s.explicit.has(p)) {
+      if (!options.batchTracking && !s.explicit.has(p)) {
         const current = (
           await exec("git", ["ls-files", "-z", "--", p], {
             cwd: s.root,
@@ -169,4 +170,37 @@ export async function inspectSources(
       return bytes;
     },
   };
+}
+
+/** Recheck live tracking and containment before comparing every captured input byte. */
+export async function verifySnapshot(snapshot: SourceSnapshot): Promise<void> {
+  for (const config of snapshot.configs) {
+    const root = snapshot.repoRoots[config.id]!;
+    const tracked = new Set(
+      (
+        await exec("git", ["ls-files", "-z"], {
+          cwd: root,
+          encoding: "utf8",
+          maxBuffer: 20 * 1024 * 1024,
+        })
+      ).stdout.split("\0"),
+    );
+    const explicit = new Set(
+      snapshot.provenance.find(
+        (p) => p.courseId === config.id,
+      )!.explicitUntracked,
+    );
+    for (const file of snapshot.selectedFiles.filter(
+      (f) => f.courseId === config.id,
+    )) {
+      if (!tracked.has(file.sourcePath) && !explicit.has(file.sourcePath))
+        throw new Error(`Source no longer tracked: ${file.sourcePath}`);
+      const target = await validateSourcePath(file.sourcePath, config, root);
+      const hash = createHash("sha256")
+        .update(await readFile(target))
+        .digest("hex");
+      if (hash !== file.hash)
+        throw new Error(`Source changed during snapshot: ${file.sourcePath}`);
+    }
+  }
 }

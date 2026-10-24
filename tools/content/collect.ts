@@ -52,7 +52,12 @@ export async function collectDependencies(
       });
     try {
       sourcePath(item.path);
-      const bytes = await snapshot.readFile(item.courseId, item.path),
+      const captured = snapshot.selectedFiles.find(
+        (f) => f.courseId === item.courseId && f.sourcePath === item.path,
+      );
+      const bytes =
+          captured?.bytes ??
+          (await snapshot.readFile(item.courseId, item.path)),
         text = new TextDecoder().decode(bytes);
       const kind = /\.html?$/i.test(item.path)
         ? "html"
