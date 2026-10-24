@@ -9,9 +9,12 @@ function isCatalog(value: unknown): value is Catalog {
   const courses = value.courses, groups = value.groups, docs = value.documents;
   if (!courses.every(c => record(c) && strings(c, ['id','name','repo']) && c.semester === '2026-2')) return false;
   const courseIds = new Set(courses.map(c => c.id));
+  if (courseIds.size !== courses.length) return false;
   if (!groups.every(g => record(g) && strings(g, ['id','courseId','title','sourcePath']) && courseIds.has(g.courseId) && ['date','experiment','supplement'].includes(g.kind as string) && (g.date === null || typeof g.date === 'string') && typeof g.order === 'number' && Number.isFinite(g.order))) return false;
   const groupIds = new Set(groups.map(g => g.id));
-  return docs.every(d => record(d) && strings(d, ['id','courseId','title','sourcePath','url']) && courseIds.has(d.courseId) && (d.groupId === null || groupIds.has(d.groupId)) && ['note','review','explanation','interactive','other'].includes(d.type as string) && typeof d.listed === 'boolean' && (d.url as string).startsWith('/content/'));
+  if (groupIds.size !== groups.length) return false;
+  const groupCourses = new Map(groups.map(g => [g.id, g.courseId]));
+  return docs.every(d => record(d) && strings(d, ['id','courseId','title','sourcePath','url']) && courseIds.has(d.courseId) && (d.groupId === null || (groupIds.has(d.groupId) && groupCourses.get(d.groupId) === d.courseId)) && ['note','review','explanation','interactive','other'].includes(d.type as string) && typeof d.listed === 'boolean' && (d.url as string).startsWith('/content/')) && new Set(docs.map(d => d.id)).size === docs.length;
 }
 async function load() {
   root.replaceChildren();

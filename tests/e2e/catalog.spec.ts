@@ -73,6 +73,19 @@ test('generated fixture catalog is served by Vite without route mocks', async ({
   expect(original.ok()).toBe(true);
   expect(await original.text()).toContain('합성');
 });
+for (const malformed of ['duplicate course', 'duplicate group', 'duplicate document', 'cross-course group']) test(`rejects ${malformed} and retries`, async ({ page }) => {
+  const invalid = structuredClone(catalog);
+  if (malformed === 'duplicate course') invalid.courses.push(invalid.courses[0]!);
+  if (malformed === 'duplicate group') invalid.groups.push(invalid.groups[0]!);
+  if (malformed === 'duplicate document') invalid.documents.push(invalid.documents[0]!);
+  if (malformed === 'cross-course group') invalid.documents[0]!.groupId = invalid.groups[1]!.id;
+  let retry = false;
+  await page.route('**/catalog.json', route => { const value = retry ? catalog : invalid; retry = true; return route.fulfill({ json: value }); });
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText('자료 목록을 불러오지 못했습니다');
+  await page.getByRole('button', { name: '다시 시도' }).click();
+  await expect(page.getByRole('heading', { name: '실험01' })).toBeVisible();
+});
 test('browse restoration is silent and selection/destroy expose the integration contract', async ({ page }) => {
   await open(page);
   const events = await page.evaluate(async catalog => {

@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, realpath } from "node:fs/promises";
 import { resolve, relative } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -7,18 +7,15 @@ import { buildContent } from "./content/build.js";
 import { writeReport, validateReportPath, type BuildReport } from "./content/report.js";
 import { checkBundle, bundleLimits } from "./content/preflight.js";
 import type { SourceSettings } from "./content/source.js";
+import { parseAppArguments, validateAppOutput } from './app-build-safety.js';
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!["content:build", "build", "dev"].includes(command ?? "")) throw new Error("Expected content:build, build, or dev");
-  let sources = ".local/fixture-sources.json";
-  let explicitSources = false;
-  const viteArgs: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--sources") {
-      if (!args[i + 1] || args[i + 1]!.startsWith("--")) throw new Error("--sources requires a path");
-      sources = args[++i]!; explicitSources = true;
-    } else if (command === "content:build") throw new Error(`Unknown argument: ${args[i]}`);
-    else viteArgs.push(args[i]!);
+  const { sources, explicitSources, viteArgs } = parseAppArguments(command!, args);
+  const appRoot = fileURLToPath(new URL('../', import.meta.url));
+  if (command !== 'content:build') {
+    await validateAppOutput([], resolve(sources));
+    if (await realpath(process.cwd()) !== await realpath(appRoot)) throw Error('App commands must run in the owned project directory');
   }
   // Real originals are opt-in; no default command reads .local/sources.json.
   if (!explicitSources) await import("./create-fixture.js");
@@ -32,6 +29,10 @@ async function main() {
     typeof settings.explicitUntracked !== "object"
   )
     throw new Error("Invalid source settings");
+  const outputDir = command === 'content:build' ? resolve('dist') : await validateAppOutput(Object.values(settings.roots), resolve(sources));
+  const reportPath = resolve('.reports/app-build.json');
+  const exclusions = [outputDir, ...Object.values(settings.roots)];
+  if (command === 'build') await validateReportPath(reportPath, exclusions);
   const result = await buildContent({
     settings,
     outputDir: resolve(".generated/content"),
@@ -53,12 +54,10 @@ async function main() {
     ),
   );
   if (command === "content:build") return;
-  const reportPath = resolve('.reports/app-build.json');
-  const exclusions = [resolve('dist'), ...Object.values(settings.roots)];
-  if (command === 'build') await validateReportPath(reportPath, exclusions);
+  await validateAppOutput(Object.values(settings.roots), resolve(sources));
   const vite = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url));
   await new Promise<void>((done, reject) => {
-    const child = spawn(process.execPath, [vite, ...(command === 'build' ? ['build'] : []), ...viteArgs], { stdio: 'inherit' });
+    const child = spawn(process.execPath, [vite, ...(command === 'build' ? ['build'] : []), '--config', resolve(appRoot, 'vite.config.ts'), ...viteArgs], { stdio: 'inherit' });
     child.once('error', reject);
     child.once('exit', code => code === 0 ? done() : reject(Error(`Vite exited with ${code}`)));
   });
@@ -71,10 +70,11 @@ async function main() {
         const path = resolve(dir, entry.name);
         if (entry.isSymbolicLink()) throw Error('Symlink in final app output');
         if (entry.isDirectory()) await visit(path);
-        else if (entry.isFile()) { const bytes = await readFile(path); outputs.push({ path: relative(resolve('dist'), path).replaceAll('\\', '/'), size: bytes.length, sha256: hash(bytes) }); }
+        else if (entry.isFile()) { const bytes = await readFile(path); outputs.push({ path: relative(outputDir, path).replaceAll('\\', '/'), size: bytes.length, sha256: hash(bytes) }); }
       }
     }
-    await visit(resolve('dist'));
+    await validateAppOutput(Object.values(settings.roots), resolve(sources));
+    await visit(outputDir);
     outputs.sort((a,b) => a.path.localeCompare(b.path));
     const issues = checkBundle(outputs, bundleLimits);
     if (issues.length) throw Error('Final app bundle exceeds hosting limits');
