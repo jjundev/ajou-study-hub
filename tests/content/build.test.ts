@@ -266,3 +266,184 @@ test("normalizes rebased Unicode URLs to the physical NFC output path", () => {
     "/content/logic-lab/%EB%B3%B5%EC%8A%B5%EB%85%B8%ED%8A%B8/%C3%A9.png",
   ]);
 });
+import { mkdir, symlink } from "node:fs/promises";
+import { writeReport, type BuildReport } from "../../tools/content/report.js";
+const emptyReport: BuildReport = {
+  createdAt: "fixture",
+  bundleHash: "",
+  sources: [],
+  inputs: [],
+  outputs: [],
+  issues: [],
+};
+test("rejects source repository report paths before success or failure writes", async () => {
+  const f = await createSourceFixture(),
+    outputDir = resolve(".generated/report-source-" + Date.now());
+  try {
+    await f.write("복습노트/1024/a.html", "before");
+    await f.write("content-build.json", "original report sentinel");
+    await f.track();
+    await mkdir(outputDir, { recursive: true });
+    await writeFileForTest(resolve(outputDir, "sentinel"), "unchanged");
+    const options = {
+      settings: f.settings,
+      configs: [f.config],
+      outputDir,
+      reportDir: f.root,
+    };
+    await expect(buildContent(options)).rejects.toThrow(/report/i);
+    expect(await readFile(resolve(f.root, "content-build.json"), "utf8")).toBe(
+      "original report sentinel",
+    );
+    expect(await readFile(resolve(outputDir, "sentinel"), "utf8")).toBe(
+      "unchanged",
+    );
+    await f.write("복습노트/1024/a.html", '<img src="missing.png">');
+    await expect(buildContent(options)).rejects.toThrow(/report/i);
+    expect(await readFile(resolve(f.root, "content-build.json"), "utf8")).toBe(
+      "original report sentinel",
+    );
+  } finally {
+    await f.dispose();
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+import { writeFile as writeFileForTest } from "node:fs/promises";
+test("rejects symlink report directories into output before any publication", async () => {
+  const f = await createSourceFixture(),
+    outputDir = resolve(".generated/report-link-" + Date.now()),
+    reportDir = resolve(".reports/report-link-" + Date.now());
+  try {
+    await f.write("복습노트/1024/a.html", "before");
+    await f.track();
+    await mkdir(outputDir, { recursive: true });
+    await writeFileForTest(
+      resolve(outputDir, "content-build.json"),
+      "output sentinel",
+    );
+    await symlink(
+      outputDir,
+      reportDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await expect(
+      buildContent({
+        settings: f.settings,
+        configs: [f.config],
+        outputDir,
+        reportDir,
+      }),
+    ).rejects.toThrow(/report/i);
+    expect(
+      await readFile(resolve(outputDir, "content-build.json"), "utf8"),
+    ).toBe("output sentinel");
+    await expect(
+      readFile(resolve(outputDir, "catalog.json")),
+    ).rejects.toThrow();
+    await expect(
+      writeReport(emptyReport, resolve(reportDir, "content-build.json")),
+    ).rejects.toThrow(/report/i);
+    expect(
+      await readFile(resolve(outputDir, "content-build.json"), "utf8"),
+    ).toBe("output sentinel");
+  } finally {
+    await rm(reportDir, { force: true, recursive: true });
+    await f.dispose();
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+test("rejects existing report file symlinks without changing original bytes", async () => {
+  const f = await createSourceFixture(),
+    reportDir = resolve(".reports/report-file-" + Date.now());
+  try {
+    await f.write("content-build.json", "source sentinel");
+    await mkdir(reportDir, { recursive: true });
+    const path = resolve(reportDir, "content-build.json");
+    await symlink(resolve(f.root, "content-build.json"), path, "file");
+    await expect(writeReport(emptyReport, path)).rejects.toThrow(/report/i);
+    expect(await readFile(resolve(f.root, "content-build.json"), "utf8")).toBe(
+      "source sentinel",
+    );
+  } finally {
+    await rm(reportDir, { recursive: true, force: true });
+    await f.dispose();
+  }
+});
+test("multiple base elements retain the first href for collection and rebasing", async () => {
+  const f = await createSourceFixture(),
+    outputDir = resolve(".generated/first-base-" + Date.now());
+  try {
+    await f.write(
+      "복습노트/1024/a.html",
+      '<base href="/복습노트/first/"><base href="/복습노트/ignored/"><img src="x.png">',
+    );
+    await f.write("복습노트/first/x.png", "first");
+    await f.track();
+    const result = await buildContent({
+      settings: f.settings,
+      configs: [f.config],
+      outputDir,
+      reportDir: resolve(".reports/test-build"),
+    });
+    expect(result.issues).toEqual([]);
+    const html = await readFile(
+      resolve(outputDir, "content/logic-lab/복습노트/1024/a.html"),
+      "utf8",
+    );
+    expect(extractReferences(html, "html")).toEqual([
+      "/content/logic-lab/%EB%B3%B5%EC%8A%B5%EB%85%B8%ED%8A%B8/first/x.png",
+    ]);
+  } finally {
+    await f.dispose();
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+import { symlinkSync } from "node:fs";
+test("failure reporting revalidates a replaced report-file symlink and preserves output", async () => {
+  const f = await createSourceFixture(),
+    outputDir = resolve(".generated/report-failure-" + Date.now()),
+    reportDir = resolve(".reports/report-failure-" + Date.now());
+  try {
+    await f.write("복습노트/1024/a.html", "fixture");
+    await f.write("sentinel.json", "source sentinel");
+    await f.track();
+    await mkdir(reportDir, { recursive: true });
+    await mkdir(outputDir, { recursive: true });
+    await writeFileForTest(resolve(outputDir, "sentinel"), "old output");
+    const spy = vi
+      .spyOn(transformer, "transformHtml")
+      .mockImplementation(() => {
+        symlinkSync(
+          resolve(f.root, "sentinel.json"),
+          resolve(reportDir, "content-build.json"),
+          "file",
+        );
+        throw new Error("synthetic transform failure");
+      });
+    try {
+      await expect(
+        buildContent({
+          settings: f.settings,
+          configs: [f.config],
+          outputDir,
+          reportDir,
+        }),
+      ).rejects.toThrow(/report/i);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await readFile(resolve(f.root, "sentinel.json"), "utf8")).toBe(
+      "source sentinel",
+    );
+    expect(await readFile(resolve(outputDir, "sentinel"), "utf8")).toBe(
+      "old output",
+    );
+    await expect(
+      readFile(resolve(outputDir, "catalog.json")),
+    ).rejects.toThrow();
+  } finally {
+    await rm(reportDir, { recursive: true, force: true });
+    await rm(outputDir, { recursive: true, force: true });
+    await f.dispose();
+  }
+});

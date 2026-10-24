@@ -28,7 +28,7 @@ import {
   matchingException,
   type ContentException,
 } from "./preflight.js";
-import { writeReport, type BuildReport } from "./report.js";
+import { writeReport, validateReportPath, type BuildReport } from "./report.js";
 export type BuildResult = {
   catalog: Catalog;
   outputDir: string;
@@ -74,6 +74,15 @@ export async function buildContent(options: {
   const reportPath = resolve(options.reportDir, "content-build.json");
   if (reportPath === outputDir || inside(outputDir, reportPath))
     throw new Error("Report must be outside deployment output");
+  const reportExclusions = [
+    outputDir,
+    ...(await Promise.all(
+      Object.values(options.settings.roots).map((root) =>
+        realpath(resolve(root)),
+      ),
+    )),
+  ];
+  await validateReportPath(reportPath, reportExclusions);
   const configs = options.configs ?? courses;
   const report: BuildReport = {
     createdAt: new Date().toISOString(),
@@ -262,6 +271,7 @@ export async function buildContent(options: {
       await writeFile(target, bytes);
     }
     await verifySnapshot(snapshot);
+    await validateReportPath(reportPath, reportExclusions);
     await assertOutput(outputDir);
     await assertOutput(stage);
     await assertOutput(backup);
@@ -286,7 +296,7 @@ export async function buildContent(options: {
       await assertOutput(backup);
       await rm(backup, { recursive: true, force: true });
     }
-    await writeReport(report, reportPath);
+    await writeReport(report, reportPath, reportExclusions);
     return {
       catalog,
       outputDir,
@@ -303,7 +313,7 @@ export async function buildContent(options: {
       reason: (error as Error).message,
       severity: "error",
     });
-    await writeReport(report, reportPath);
+    await writeReport(report, reportPath, reportExclusions);
     throw new Error(`${(error as Error).message}; report: ${reportPath}`);
   } finally {
     await assertOutput(stage);

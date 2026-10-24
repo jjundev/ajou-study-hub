@@ -1,4 +1,4 @@
-import { mapSrcset } from "./references.js";
+import { mapSrcset, extractBase } from "./references.js";
 import { parse, serialize } from "parse5";
 import postcss from "postcss";
 import valueParser from "postcss-value-parser";
@@ -61,14 +61,8 @@ export function rebaseReferences(
   };
   if (kind === "css") return css(text);
   const tree = parse(text);
-  const find = (n: any) => {
-    if (n.tagName === "base") {
-      const a = n.attrs.find((a: any) => a.name === "href");
-      if (a) base = new URL(a.value, base);
-    }
-    for (const c of n.childNodes ?? []) find(c);
-  };
-  find(tree);
+  const href = extractBase(text);
+  if (href !== undefined) base = new URL(href, base);
   const visit = (n: any) => {
     if (n.tagName) {
       for (const a of n.attrs) {
