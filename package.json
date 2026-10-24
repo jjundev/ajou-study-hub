@@ -1,0 +1,40 @@
+{
+  "name": "ajou-study-hub",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "fixtures:create": "tsx tools/create-fixture.ts",
+    "content:build": "tsx tools/cli.ts content:build",
+    "build": "vite build",
+    "dev": "vite",
+    "test:e2e": "playwright test",
+    "verify:content": "tsx tools/verify-content.ts",
+    "hosting:dev": "wrangler dev",
+    "deploy:bootstrap": "tsx tools/deploy/bootstrap.ts",
+    "access:verify": "tsx tools/deploy/access.ts",
+    "deploy:private": "tsx tools/deploy/release.ts"
+  },
+  "dependencies": {
+    "parse5": "8.0.1",
+    "postcss": "8.5.31",
+    "postcss-value-parser": "4.2.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.0.5",
+    "wrangler": "4.152.0"
+  },
+  "overrides": {
+    "undici": "7.30.1"
+  }
+}

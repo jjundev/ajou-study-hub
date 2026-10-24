@@ -1,0 +1,10 @@
+{
+  "roots": {
+    "logic-lab": "../논회실",
+    "life-science": "../생명과학",
+    "circuits-2": "../ajou-electronic-circuits-2",
+    "data-structures": "../ajou-jagual",
+    "ml-basics": "../ajou-ml-basics"
+  },
+  "explicitUntracked": {}
+}
