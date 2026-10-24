@@ -44,7 +44,7 @@ export function installStorage(namespace: string, rules: StorageRule[]): void {
    deleteProperty(_target,key){if(Object.hasOwn(target,key))return Reflect.deleteProperty(target,key);if(typeof key==='string'&&!reserved(key))remove(key);return true;},
    ownKeys(){return [...new Set([...Reflect.ownKeys(target),...keys()])];},
    has(_target,key){return reserved(key)||(typeof key==='string'&&get(key)!==null)||Reflect.has(target,key);},
-   getOwnPropertyDescriptor(_target,key){if(Object.hasOwn(target,key))return Reflect.getOwnPropertyDescriptor(target,key);if(typeof key==='string'&&!reserved(key)){const value=get(key);if(value!==null)return {value,writable:true,enumerable:true,configurable:true};}return undefined;},
+   getOwnPropertyDescriptor(_target,key){if(Object.hasOwn(target,key))return Reflect.getOwnPropertyDescriptor(target,key);if(typeof key==='string'){const value=get(key);if(value!==null)return {value,writable:true,enumerable:true,configurable:true};}return undefined;},
    defineProperty(_target,key,descriptor){if(typeof key==='string'&&!reserved(key)&&'value' in descriptor){set(key,String(descriptor.value));return true;}return false;},
   });
   Object.defineProperty(window,name,{configurable:true,enumerable:true,get:()=>adapter});

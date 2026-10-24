@@ -38,3 +38,22 @@ for (const failure of ['getter','quota','none']) test(`recovers invalid shapes a
  await page.getByRole('button').click(); await expect(page.locator('output')).toBeVisible();
  expect(await page.evaluate(()=>{sessionStorage.setItem('x','y');return sessionStorage.getItem('x');})).toBe('y');
 });
+
+test('enumerates stored prototype-name keys while preserving method access', async ({page}) => {
+ await page.route('https://storage.test/**',async route=>route.fulfill({contentType:'text/html',body:await html()}));
+ await page.goto('https://storage.test/a');
+ expect(await page.evaluate(()=>{
+  localStorage.setItem('clear','bar');
+  localStorage.setItem('getItem','saved');
+  sessionStorage.setItem('clear','session');
+  return {
+   localKeys:Object.keys(localStorage).sort(),
+   sessionKeys:Object.keys(sessionStorage),
+   clearType:typeof localStorage.clear,
+   getItemType:typeof localStorage.getItem,
+   values:[localStorage.getItem('clear'),localStorage.getItem('getItem'),sessionStorage.getItem('clear')],
+  };
+ })).toEqual({localKeys:['clear','getItem'],sessionKeys:['clear'],clearType:'function',getItemType:'function',values:['bar','saved','session']});
+ await page.evaluate(()=>localStorage.clear());
+ expect(await page.evaluate(()=>[Object.keys(localStorage),localStorage.length,sessionStorage.getItem('clear')])).toEqual([[],0,'session']);
+});
