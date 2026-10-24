@@ -1,6 +1,36 @@
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import postcss from "postcss";
 import valueParser from "postcss-value-parser";
+// Srcset URLs extend through commas until whitespace; only trailing commas
+// terminate a candidate without descriptors. This preserves data URL payloads.
+function srcsetReferences(value: string): string[] {
+  const urls: string[] = [];
+  const space = (char: string) => /[\t\n\f\r ]/.test(char);
+  let position = 0;
+  while (position < value.length) {
+    while (
+      position < value.length &&
+      (space(value[position]!) || value[position] === ",")
+    )
+      position++;
+    const start = position;
+    while (position < value.length && !space(value[position]!)) position++;
+    const token = value.slice(start, position);
+    if (!token) break;
+    const url = token.replace(/,+$/, "");
+    if (url) urls.push(url);
+    if (token.endsWith(",")) continue;
+    // Descriptors may contain parentheses; commas inside them are not separators.
+    let parentheses = 0;
+    while (position < value.length) {
+      const char = value[position++]!;
+      if (char === "(") parentheses++;
+      else if (char === ")") parentheses = Math.max(0, parentheses - 1);
+      else if (char === "," && parentheses === 0) break;
+    }
+  }
+  return urls;
+}
 export function extractReferences(
   text: string,
   kind: "html" | "css",
@@ -33,11 +63,7 @@ export function extractReferences(
         if (n.tagName === "base") continue;
         if (["href", "src", "poster", "data", "xlink:href"].includes(a.name))
           refs.push(a.value);
-        if (a.name === "srcset")
-          for (const part of a.value.split(/,\s*(?![^\s]*,)/)) {
-            const url = part.trim().split(/\s+/)[0];
-            if (url) refs.push(url);
-          }
+        if (a.name === "srcset") refs.push(...srcsetReferences(a.value));
         if (a.name === "style")
           refs.push(...extractReferences(`x{${a.value}}`, "css"));
       }

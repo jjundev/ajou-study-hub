@@ -79,9 +79,11 @@ export async function resolveReference(
     )
       throw new Error("Ambiguous encoded path");
     const path = posix.normalize(
-      decoded.startsWith("/")
-        ? decoded.slice(1)
-        : posix.join(posix.dirname(sourcePath(input.from)), decoded),
+      decoded === ""
+        ? sourcePath(input.from)
+        : decoded.startsWith("/")
+          ? decoded.slice(1)
+          : posix.join(posix.dirname(sourcePath(input.from)), decoded),
     );
     await validateSourcePath(path, config, repoRoot);
     return { kind: "local", sourcePath: path, suffix };

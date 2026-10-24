@@ -46,6 +46,58 @@ describe("dependency closure", () => {
       await f.dispose();
     }
   });
+  it("keeps query-only references on the current document without a base", async () => {
+    const f = await createSourceFixture();
+    try {
+      const path = "복습노트/1024/a.html";
+      await f.write(path, '<a href="?mode=1#풀이">same document</a>');
+      await f.track();
+      expect(
+        await resolveReference(
+          { courseId: f.config.id, from: path, ref: "?mode=1#풀이" },
+          f.config,
+          f.root,
+        ),
+      ).toEqual({ kind: "local", sourcePath: path, suffix: "?mode=1#풀이" });
+      const snapshot = await inspectSources([f.config], f.settings);
+      const graph = await collectDependencies(
+        snapshot,
+        await buildCatalog(snapshot),
+        [f.config],
+      );
+      expect(graph.issues).toEqual([]);
+      expect(graph.files.map((file) => file.sourcePath)).toEqual([path]);
+      expect(graph.linkedDocuments).toEqual([]);
+    } finally {
+      await f.dispose();
+    }
+  });
+  it("keeps data URL commas inside mixed srcset candidates", async () => {
+    const f = await createSourceFixture();
+    try {
+      const html = '<img srcset="data:image/png;base64,AAAA 1x, x.png 2x">';
+      expect(extractReferences(html, "html")).toEqual([
+        "data:image/png;base64,AAAA",
+        "x.png",
+      ]);
+      await f.write("복습노트/1024/a.html", html);
+      await f.write("복습노트/1024/x.png", "local");
+      await f.track();
+      const snapshot = await inspectSources([f.config], f.settings);
+      const graph = await collectDependencies(
+        snapshot,
+        await buildCatalog(snapshot),
+        [f.config],
+      );
+      expect(graph.issues).toEqual([]);
+      expect(graph.files.map((file) => file.sourcePath).sort()).toEqual([
+        "복습노트/1024/a.html",
+        "복습노트/1024/x.png",
+      ]);
+    } finally {
+      await f.dispose();
+    }
+  });
   it("rejects_escape", async () => {
     const f = await createSourceFixture();
     try {
