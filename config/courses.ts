@@ -12,6 +12,19 @@ export type CourseConfig = Course & {
   typeRules: TypeRule[];
   extraFiles: string[];
 };
+const additionalRoots: Record<string, string[]> = {
+  "circuits-2": ["workbook/pdf/ch09-문제.pdf", "workbook/pdf/ch10-문제.pdf"],
+  "data-structures": [
+    "자료구조_강의록_2026/Software_2_Recursion.pdf",
+    "자료구조_강의록_2026/Software_3_ArrayStructureList.pdf",
+    "자료구조_강의록_2026/Software_4_List.pdf",
+    "자료구조_강의록_2026/Software_5_Stack.pdf",
+    "자료구조_강의록_2026/Software_6_Queue.pdf",
+    "실습/실습2/Practice2.pdf",
+    "과제/과제2/HW2.pdf",
+  ],
+  "ml-basics": ["강의노트/추가 강의"],
+};
 const groupRules: GroupRule[] = [
   { kind: "date", pattern: "^\\d{4}$" },
   { kind: "experiment", pattern: "^실험0[1-6]$" },
@@ -41,7 +54,7 @@ export const courses: CourseConfig[] = [
   repo: repo!,
   semester: "2026-2",
   contentRoot: "복습노트",
-  allowedRoots: ["복습노트"],
+  allowedRoots: ["복습노트", ...(additionalRoots[id!] ?? [])],
   groupRules,
   typeRules,
   extraFiles: [],

@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, realpath } from "node:fs/promises";
-import { resolve, relative, isAbsolute } from "node:path";
+import { resolve } from "node:path";
+import { sourcePath as pathName, validateSourcePath } from "./paths.js";
 import { createHash } from "node:crypto";
 import type { CourseConfig } from "../../config/courses.js";
 const exec = promisify(execFile);
@@ -33,20 +34,8 @@ export type SourceSnapshot = {
   provenance: SourceProvenance[];
   configs: CourseConfig[];
   selectedFiles: SelectedFile[];
+  repoRoots: Record<string, string>;
 };
-function pathName(path: string): string {
-  const p = path.replaceAll("\\", "/");
-  if (
-    !p ||
-    isAbsolute(p) ||
-    /^[A-Za-z]:/.test(p) ||
-    p.split("/").some((s) => !s || s === "." || s === "..")
-  )
-    throw new Error(`Unsafe source path: ${path}`);
-  return p;
-}
-const within = (path: string, root: string) =>
-  path === root || path.startsWith(root + "/");
 export async function inspectSources(
   configs: CourseConfig[],
   settings: SourceSettings,
@@ -139,6 +128,7 @@ export async function inspectSources(
   }
   return {
     configs,
+    repoRoots: Object.fromEntries([...sources].map(([id, s]) => [id, s.root])),
     provenance,
     catalogInputs,
     selectedFiles,
@@ -148,7 +138,7 @@ export async function inspectSources(
       const p = pathName(path);
       if (
         !s.selected.has(p) ||
-        !s.config.allowedRoots.some((r) => within(p, r))
+        !s.config.allowedRoots.some((r) => p === r || p.startsWith(r + "/"))
       )
         throw new Error(`Source not allowed: ${p}`);
       if (!s.explicit.has(p)) {
@@ -161,20 +151,7 @@ export async function inspectSources(
         if (!current.includes(p))
           throw new Error(`Source no longer tracked: ${p}`);
       }
-      const target = await realpath(resolve(s.root, p));
-      const rel = relative(s.root, target);
-      if (rel.startsWith("..") || isAbsolute(rel))
-        throw new Error(`Source escapes repository: ${p}`);
-      const realAllowed = await Promise.all(
-        s.config.allowedRoots.map((r) => realpath(resolve(s.root, r))),
-      );
-      if (
-        !realAllowed.some((r) => {
-          const part = relative(r, target);
-          return !part.startsWith("..") && !isAbsolute(part);
-        })
-      )
-        throw new Error(`Source escapes allowed roots: ${p}`);
+      const target = await validateSourcePath(p, s.config, s.root);
       const bytes = new Uint8Array(await readFile(target));
       const hash = createHash("sha256").update(bytes).digest("hex");
       const prior = selectedFiles.find(
