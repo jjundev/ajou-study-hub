@@ -170,4 +170,74 @@ Ruling: releasePrivate.reportPath means final app-build manifest; runtime/protec
 Ruling: Require current source profile path/bytes, selected inputs and Git provenance/tracking to still match the verified snapshot at private upload — current-input semantics were ambiguous for sealed historical artifacts; conservative first-release workflow avoids silently publishing stale intent — ifwrong, older verifiedartifact needs source restore/reverification; no automatic rebuild and no original writes. Addsourceidentitytoruntimeproof andfreshactualrun afteralltests ifschemachanges.
 ```
 
-[현재 구현 상태](implementation-status.md) · [실행 계획](../superpowers/plans/2026-10-24-ajou-study-hub.md)
+## 29
+
+```text
+Ruling: Reject source-child symlinks/junctions rather than implementing dual logical/canonical authorization; configured source root may resolve canonically — actual five source trees have no content links, and tracked aliases imported forbidden untracked targets — if wrong, legitimate future linked content needs real copies or separately validated support.
+```
+
+## 30
+
+```text
+Ruling: Permit only well-formed normal collector external-reference informational warnings at release while preserving strict static defect/runtime error/unknown-warning checks — PRD permits existing CDN/outbound refs and actual verified manifest has400 — if wrong, malformed warning classification could hide a defect; add negative cases.
+```
+
+## 31
+
+```text
+Ruling: Live CF schemas/free pricing/upload and real identity/body acceptance remain a security/account-input gate — credentials/email/witness absent; mocks are not live proof — if wrong, production compatibility needs rework after approved read-only validation.
+```
+
+## 32
+
+```text
+Ruling: Enabled previews/custom domains/zone routes remain rejected initial modes — initial workers.dev and unused-preview-disable path satisfies chosen scope — if wrong, those deployment modes need new authoritative inventory tests.
+```
+
+## 33
+
+```text
+Ruling: Trusted source iframe authentication/sanitization is not a new boundary — PRD explicitly permits owned scripts and same-origin compatibility — if wrong, untrusted-content support requires a separate sandbox redesign.
+```
+
+## 34
+
+```text
+Ruling: Older Navigation-API-absent full history, cross-path SPA state, trusted-only listeners and form-owned history stay documented limits — current major-browser supported paths are tested — if wrong, additional compatibility work is needed.
+```
+
+## 35
+
+```text
+Ruling: Offline/PWA/device-sync/multiuser/fullbodysearch/remote-auto-sync/authoring/paid features stay out of scope — PRD v1 excludes them — if wrong, new requirements/planning needed.
+```
+
+## 36
+
+```text
+Ruling: Adversarial same-user modification of already sealed stage is not prevented — same local user already controls code/credentials; normal source/dist/config races and preexisting aliases are in scope — if wrong, an external trusted execution boundary is needed.
+```
+
+## 37
+
+```text
+Ruling: Subpath hosting and historical release with changed live sources remain unsupported — root workers.dev and conservative current-source rule are chosen — if wrong, caller/artifact-mode API needs expansion.
+```
+
+## 38
+
+```text
+Ruling: Do not spend a formatting-only wave or suppress Vite large-copy timing notices — no concrete correctness defect from density/timing — if wrong, maintainability/performance requires later focused work; touched security code should be readable.
+```
+
+## 39
+
+```text
+Ruling: Remove only repeated-build test historical30s override, inheritalreadyapprovedsuite60s — fullcontentionrepeated30.017/30.228/30.356timeoutsdespitepreviewoff/setupreduction whilefocusedpasses22.32/11.72; measuredGitstartupslow — ifwrong, thisonehangfailslater; retainall3builds/assertions/globalsettings, no productchange orblanketextension.
+```
+
+## 40
+
+```text
+Ruling: AddnarrowboundedWindows EPERM/EACCES/EBUSY atomicreport-rename retry, eachattemptrevalidatestemp/destination/allcontainment/alias/sourceexclusions; no unlink/truncate/fallbacksuccess — fourthfull166/167failedonlyactualEPERMonisolatedfalseproofrename,528.01s; repeatedbuildnowpasses — ifwrong, transientpublicationtakes<1slonger; persistenterrorsstillthrow/neverclaimsproofinvalidated, addrealfile eventual/alias/persistentrejection tests.
+```
