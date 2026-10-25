@@ -29,8 +29,9 @@ const contains = (root: string, path: string) => {
 export async function validateReportPath(
   path: string,
   exclusions: string[] = [],
+  projectRoot = process.cwd(),
 ): Promise<void> {
-  const project = await realpath(process.cwd()),
+  const project = await realpath(projectRoot),
     owned = resolve(project, ".reports"),
     target = resolve(path);
   if (target === owned || !contains(owned, target))
@@ -61,22 +62,23 @@ export async function writeReport(
   report: unknown,
   path: string,
   exclusions: string[] = [],
+  projectRoot = process.cwd(),
 ): Promise<void> {
   path = resolve(path);
-  await validateReportPath(path, exclusions);
+  await validateReportPath(path, exclusions, projectRoot);
   await mkdir(dirname(path), { recursive: true });
-  await validateReportPath(path, exclusions);
+  await validateReportPath(path, exclusions, projectRoot);
   const temporary = path + ".tmp-" + randomUUID();
   try {
-    await validateReportPath(temporary, exclusions);
+    await validateReportPath(temporary, exclusions, projectRoot);
     await writeFile(temporary, JSON.stringify(report, null, 2) + "\n", {
       flag: "wx",
       mode: 0o600,
     });
-    await validateReportPath(path, exclusions);
+    await validateReportPath(path, exclusions, projectRoot);
     await rename(temporary, path);
   } finally {
-    await validateReportPath(temporary, exclusions);
+    await validateReportPath(temporary, exclusions, projectRoot);
     try {
       await unlink(temporary);
     } catch (error) {

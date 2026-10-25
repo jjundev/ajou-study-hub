@@ -1,3 +1,4 @@
+import { verificationProject } from "./verification-project.js";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
@@ -24,38 +25,78 @@ import { verifyRepresentatives } from "./representatives.js";
 import type { Catalog } from "../src/content/model.js";
 export async function verifyActual(
   sourcesPath: string,
-  options: { reportPath?: string } = {},
+  options: { reportPath?: string; testProjectRoot?: string } = {},
 ) {
   const startedAt = Date.now();
-  const settings = JSON.parse(
-    await readFile(resolve(sourcesPath), "utf8"),
-  ) as SourceSettings;
+  const projectRoot = await verificationProject(options.testProjectRoot);
+  const canonicalProof = resolve(projectRoot, ".reports/verification.json");
+  const running = {
+    createdAt: new Date().toISOString(),
+    passed: false,
+    deploymentEligible: false,
+    status: "running",
+  };
+  await writeReport(
+    running,
+    canonicalProof,
+    [resolve(projectRoot, "dist")],
+    projectRoot,
+  );
+  const parsed: unknown = JSON.parse(
+    await readFile(resolve(projectRoot, sourcesPath), "utf8"),
+  );
+  const record = (v: unknown): v is Record<string, unknown> =>
+    !!v && typeof v === "object" && !Array.isArray(v);
+  if (
+    !record(parsed) ||
+    !record(parsed.roots) ||
+    !record(parsed.explicitUntracked) ||
+    !courses.every(
+      (c) =>
+        typeof (parsed.roots as Record<string, unknown>)[c.id] === "string" &&
+        String((parsed.roots as Record<string, unknown>)[c.id]).trim(),
+    ) ||
+    !Object.values(parsed.roots).every(
+      (v) => typeof v === "string" && v.trim(),
+    ) ||
+    !Object.values(parsed.explicitUntracked).every(
+      (v) => Array.isArray(v) && v.every((p) => typeof p === "string"),
+    )
+  )
+    throw Error("Invalid source settings");
+  const settings: SourceSettings = {
+    roots: Object.fromEntries(
+      Object.entries(parsed.roots).map(([k, v]) => [
+        k,
+        resolve(projectRoot, v as string),
+      ]),
+    ),
+    explicitUntracked: parsed.explicitUntracked as Record<string, string[]>,
+  };
   const reportPath = resolve(
+    projectRoot,
     options.reportPath ?? ".reports/verification.json",
   );
-  await validateReportPath(reportPath, [
-    resolve("dist"),
+  const exclusions = [
+    resolve(projectRoot, "dist"),
     ...Object.values(settings.roots),
-  ]);
-  await writeReport(
-    {
-      createdAt: new Date().toISOString(),
-      passed: false,
-      deploymentEligible: false,
-      status: "running",
-    },
-    reportPath,
-    [resolve("dist"), ...Object.values(settings.roots)],
-  );
+  ];
+  await validateReportPath(reportPath, exclusions, projectRoot);
+  if (reportPath !== canonicalProof)
+    await writeReport(running, reportPath, exclusions, projectRoot);
   // Fail closed even when the source checkout cannot be inspected.
   const snapshot = await inspectSources(courses, settings, {
     batchTracking: true,
   });
   const manifest = JSON.parse(
-    await readFile(".reports/app-build.json", "utf8"),
+    await readFile(resolve(projectRoot, ".reports/app-build.json"), "utf8"),
   ) as BuildReport;
   console.log(`Checking ${manifest.outputs.length} app bundle outputs`);
-  await assertCurrentBundle(resolve("dist"), manifest);
+  await assertCurrentBundle(
+    resolve(projectRoot, "dist"),
+    manifest,
+    projectRoot,
+  );
   if (JSON.stringify(manifest.sources) !== JSON.stringify(snapshot.provenance))
     throw Error(
       "Current source tracking/provenance differs from app manifest; rebuild required",
@@ -71,7 +112,7 @@ export async function verifyActual(
       throw Error("Changed source input: " + input.courseId + "/" + input.path);
   }
   const catalog = JSON.parse(
-    await readFile("dist/catalog.json", "utf8"),
+    await readFile(resolve(projectRoot, "dist/catalog.json"), "utf8"),
   ) as Catalog;
   const currentCatalog = await buildCatalog(snapshot);
   if (
@@ -92,7 +133,7 @@ export async function verifyActual(
     snapshot.readFile,
     manifest.outputs.map((f) => f.path),
   );
-  const server = await serveManifest(resolve("dist"), manifest);
+  const server = await serveManifest(resolve(projectRoot, "dist"), manifest);
   const observations: Observation[] = [];
   const documents: LoadEvidence[] = [];
   let checked = 0;
@@ -137,7 +178,10 @@ export async function verifyActual(
     // Only failures trigger a bounded original comparison. The original server probes content targets;
     // original bytes must pass the same tracked-file + allowed-root + realpath snapshot reader.
     const exceptions = JSON.parse(
-      await readFile("config/content-exceptions.json", "utf8"),
+      await readFile(
+        resolve(projectRoot, "config/content-exceptions.json"),
+        "utf8",
+      ),
     ) as RuntimeException[];
     const fontFallbackChecks: {
       documentId: string;
@@ -160,13 +204,13 @@ export async function verifyActual(
     );
     if (failures.size || fallbackDocuments.length) {
       const baseline = await serveManifest(
-        resolve("dist"),
+        resolve(projectRoot, "dist"),
         manifest,
         async (p) => {
           const match = /^content\/([^/]+)\/(.+)$/.exec(p);
           return match
             ? snapshot.readFile(match[1]!, match[2]!)
-            : readFile(resolve("dist", p));
+            : readFile(resolve(projectRoot, "dist", p));
         },
       );
       const browser = await chromium.launch();
@@ -253,7 +297,11 @@ export async function verifyActual(
       catalog,
     );
     observations.push(...representatives.observations);
-    await assertCurrentBundle(resolve("dist"), manifest);
+    await assertCurrentBundle(
+      resolve(projectRoot, "dist"),
+      manifest,
+      projectRoot,
+    );
     await verifySnapshot(snapshot);
     const after = await inspectSources(courses, settings, {
       batchTracking: true,
@@ -306,16 +354,13 @@ export async function verifyActual(
         inputCount: manifest.inputs.length,
         outputCount: manifest.outputs.length,
       },
-      deploymentEligible: passed,
+      deploymentEligible: passed && !options.testProjectRoot,
       representatives,
       dynamicAssets,
       exceptions,
       fontFallbackChecks,
     };
-    await writeReport(result, reportPath, [
-      resolve("dist"),
-      ...Object.values(settings.roots),
-    ]);
+    await writeReport(result, reportPath, exclusions, projectRoot);
     console.log(
       JSON.stringify({
         checked,
