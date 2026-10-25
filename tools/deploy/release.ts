@@ -4,7 +4,8 @@ import { dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readAccessSnapshot, settingsFingerprint, validateSettings, type DeploymentSettings, type ProtectionEvidence } from './access.js';
 import { assertReleaseAllowed } from './guard.js';
-import { assertReleaseProof } from './release-proof.js';
+import { assertReleaseProof, assertRuntimeFresh } from './release-proof.js';
+import { assertCurrentSources } from '../source-binding.js';
 import { inventory } from './bootstrap.js';
 import { assertCurrentBundle } from '../runtime-server.js';
 import { verificationProject } from '../verification-project.js';
@@ -52,7 +53,8 @@ export async function releasePrivate(options:Options,deps?:ReleaseDependencies):
  if(resolve(options.distDir)!==dist||resolve(options.reportPath)!==reportPath)throw Error('Canonical final app manifest/dist required');
  const proofPath=resolve(root,'.reports/verification.json'),accessPath=resolve(root,'.reports/access-evidence.json');
  for(const path of [reportPath,proofPath,accessPath])await validateReportPath(path,[dist],root);
- const readSettings=async()=>{const path=resolve(root,'.local/deployment.json');if((await lstat(resolve(root,'.local'))).isSymbolicLink()||(await lstat(path)).isSymbolicLink())throw Error('Symlink settings');const value=JSON.parse(await readFile(path,'utf8'));validateSettings(value);if(settingsFingerprint(value)!==settingsFingerprint(settings))throw Error('Deployment settings changed');};
+ let deploymentText:string|undefined;
+ const readSettings=async()=>{const path=resolve(root,'.local/deployment.json');if((await lstat(resolve(root,'.local'))).isSymbolicLink()||(await lstat(path)).isSymbolicLink())throw Error('Symlink settings');const text=await readFile(path,'utf8'),value=JSON.parse(text);validateSettings(value);if(settingsFingerprint(value)!==settingsFingerprint(settings)||(deploymentText!==undefined&&deploymentText!==text))throw Error('Deployment settings changed');deploymentText=text;};
  await readSettings();const configText=await validateProjectConfig(root);
  const exceptionsPath=resolve(root,'config/content-exceptions.json');
  if((await lstat(resolve(root,'config'))).isSymbolicLink()||(await lstat(exceptionsPath)).isSymbolicLink())throw Error('Symlink exceptions configuration');
@@ -60,6 +62,7 @@ export async function releasePrivate(options:Options,deps?:ReleaseDependencies):
  const reportText=await readFile(reportPath,'utf8'),proofText=await readFile(proofPath,'utf8'),accessText=await readFile(accessPath,'utf8');
  const manifest=JSON.parse(reportText) as BuildReport,proof=JSON.parse(proofText),evidence=JSON.parse(accessText) as ProtectionEvidence;
  await assertCurrentBundle(dist,manifest,root);await assertReleaseProof(root,dist,manifest,proof);
+ await assertCurrentSources(root,proof.sourceBinding,manifest);
  if(!same(await inventory(dist),manifest.outputs))throw Error('Final bundle size/inventory mismatch');
  const reader=deps?.readAccessSnapshot??readAccessSnapshot;
  const snapshot=await reader(settings);assertReleaseAllowed({settings,snapshot,evidence});
@@ -81,8 +84,13 @@ export async function releasePrivate(options:Options,deps?:ReleaseDependencies):
   if((await lstat(exceptionsPath)).isSymbolicLink()||await readFile(exceptionsPath,'utf8')!==exceptionsText)throw Error('Exception policy changed');
   for(const [path,text] of [[reportPath,reportText],[proofPath,proofText],[accessPath,accessText]] as const){await validateReportPath(path,[dist],root);if(await readFile(path,'utf8')!==text)throw Error('Release proof changed');}
   await assertCurrentBundle(dist,manifest,root);
+  await assertCurrentSources(root,proof.sourceBinding,manifest);
+  await readSettings();if(await validateProjectConfig(root)!==configText||await readFile(exceptionsPath,'utf8')!==exceptionsText)throw Error('Local configuration changed during source verification');
+  for(const [path,text] of [[reportPath,reportText],[proofPath,proofText],[accessPath,accessText]] as const){await validateReportPath(path,[dist],root);if(await readFile(path,'utf8')!==text)throw Error('Release proof changed during source verification');}
   if(!same(await inventory(directory),manifest.outputs)||!same(JSON.parse(await readFile(configPath,'utf8')),fixedConfig(settings,directory)))throw Error('Sealed artifact changed');
   await writeReport({status:'upload-started-outcome-unknown',bundleHash:manifest.bundleHash,acceptanceComplete:false,checkedAt:new Date().toISOString()},receiptPath,[dist,directory],root);
+  assertRuntimeFresh(manifest,proof);
+  assertReleaseAllowed({settings,snapshot:current,evidence});
   const receipt=await (deps?.upload??((dir:string)=>runWrangler(root,dir,configPath,settings)))(directory);
   if(receipt.url!==settings.productionUrl||!version.test(receipt.versionId))throw Error('Invalid upload receipt; inspect target before retrying');
   await writeReport({...receipt,bundleHash:manifest.bundleHash,uploadedAt:new Date().toISOString(),status:'uploaded-acceptance-pending',acceptanceComplete:false,policyFingerprint:current.fingerprint,settingsFingerprint:settingsFingerprint(settings)},receiptPath,[dist,directory],root);

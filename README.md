@@ -43,3 +43,5 @@ Wrangler Free 정적 한도는 버전당 20,000개 파일, 파일당 25 MiB이�
 사용자 승인과 실제 계정 보호 검증 후 `npm run deploy:private`를 수동 실행합니다. 명령은 재빌드하지 않으며 인자를 받지 않습니다. `.reports/app-build.json` 최종 앱 manifest, 24시간 이내의 `.reports/verification.json`, `.reports/access-evidence.json` 및 현재 설정·무료 플랜·Access 정책이 모두 일치해야 업로드합니다. 전체 문서 검사와 Chromium/Firefox/WebKit × 390/1440px의 42개 대표 시나리오, 동적 workbook 그림, 정확한 예외를 확인합니다. 실제 220개 HTML 수는 현재 catalog에서 계산하므로 향후 입력 증가도 전부 검사해야 합니다.
 
 검사한 바이트를 별도 소유 디렉터리에 복사한 뒤 그 사본과 전용 Wrangler 설정만 사용합니다. 원본 dist를 동시에 다시 빌드해도 업로드 사본은 바뀌지 않습니다. 결과는 `.reports/private-release.json`에 기록하며 업로드 영수증은 실제 AC-12/13 인수 증거와 구분합니다. 현재 실제 업로드와 인수는 미실행입니다. 상세한 게이트·실패 처리·인수 절차는 [배포 운영 안내](docs/operations/deployment.md)를 따르세요.
+
+실제 runtime proof v2는 검증에 사용한 source-settings의 canonical 경로·정확한 바이트와 해석한 원본 선택을 묶습니다. 릴리스는 시작 시와 마지막 Access 확인 후 현재 원본 전체의 hash·Git 추적/선택/provenance를 다시 읽습니다. 원본이나 설정이 바뀌면 업로드를 거절하므로 수동 build/verify를 다시 수행하세요. 기존 v1 증거는 v2 재검증이 필요합니다. `.envrc`를 포함한 모든 `.env*` 세그먼트는 금지합니다.

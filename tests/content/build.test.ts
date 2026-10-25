@@ -116,6 +116,18 @@ test("refuses unexplained missing, sensitive and production-log links", async ()
     }
   }
 }, 120000);
+test("rejects the entire environment prefix in nested source references", async () => {
+  const f = await createSourceFixture(), outputDir = resolve('.generated/reject-env-' + Date.now());
+  try {
+    await f.write('복습노트/1024/a.html', '<a href="../.envrc">shell</a><a href="../nested/.ENVproduction">production</a>');
+    await f.write('복습노트/.envrc', 'secret');
+    await f.write('복습노트/nested/.ENVproduction', 'secret');
+    await f.track();
+    await expect(buildContent({settings:f.settings,configs:[f.config],outputDir,reportDir:resolve('.reports/test-build-env')})).rejects.toThrow();
+    const report = JSON.parse(await readFile(resolve('.reports/test-build-env/content-build.json'), 'utf8'));
+    expect(report.issues.filter((i:{code:string})=>i.code==='forbidden-output')).toHaveLength(2);
+  } finally { await f.dispose(); await rm(outputDir,{recursive:true,force:true}); }
+});
 test("rejects output paths outside project generated directory", async () => {
   await expect(
     buildContent({

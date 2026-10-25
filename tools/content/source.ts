@@ -44,6 +44,7 @@ export async function inspectSources(
   const provenance: SourceProvenance[] = [];
   const catalogInputs: SourceEntry[] = [];
   const selectedFiles: SelectedFile[] = [];
+  const gitMetadata = new Map<string, { trackedPaths: string[]; commit: string; dirty: boolean }>();
   const sources = new Map<
     string,
     {
@@ -67,10 +68,12 @@ export async function inspectSources(
           maxBuffer: 20 * 1024 * 1024,
         })
       ).stdout;
-    const trackedPaths = (await git("ls-files", "-z"))
-      .split("\0")
-      .filter(Boolean)
-      .map(pathName);
+    let metadata = gitMetadata.get(root);
+    if (!metadata) {
+      metadata = { trackedPaths: (await git("ls-files", "-z")).split("\0").filter(Boolean).map(pathName), commit: (await git("rev-parse", "HEAD")).trim(), dirty: !!(await git("status", "--porcelain", "-z")) };
+      gitMetadata.set(root, metadata);
+    }
+    const trackedPaths = metadata.trackedPaths;
     const explicitUntracked = (settings.explicitUntracked[config.id] ?? []).map(
       pathName,
     );
@@ -90,8 +93,8 @@ export async function inspectSources(
     });
     provenance.push({
       courseId: config.id,
-      commit: (await git("rev-parse", "HEAD")).trim(),
-      dirty: !!(await git("status", "--porcelain", "-z")),
+      commit: metadata.commit,
+      dirty: metadata.dirty,
       trackedPaths,
       explicitUntracked,
     });
@@ -174,9 +177,10 @@ export async function inspectSources(
 
 /** Recheck live tracking and containment before comparing every captured input byte. */
 export async function verifySnapshot(snapshot: SourceSnapshot): Promise<void> {
+  const trackedRoots = new Map<string, Set<string>>();
   for (const config of snapshot.configs) {
     const root = snapshot.repoRoots[config.id]!;
-    const tracked = new Set(
+    const tracked = trackedRoots.get(root) ?? new Set(
       (
         await exec("git", ["ls-files", "-z"], {
           cwd: root,
@@ -185,6 +189,7 @@ export async function verifySnapshot(snapshot: SourceSnapshot): Promise<void> {
         })
       ).stdout.split("\0"),
     );
+    trackedRoots.set(root, tracked);
     const explicit = new Set(
       snapshot.provenance.find(
         (p) => p.courseId === config.id,

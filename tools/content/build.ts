@@ -158,7 +158,7 @@ export async function buildContent(options: {
       const forbidden = file.sourcePath
         .split("/")
         .some((p) =>
-          /^\.git$|^\.env(?:\.|$)|credentials|secrets?\.(?:json|pem)|제작|^backup[-_]/i.test(
+          /^\.git$|^\.env|credentials|secrets?\.(?:json|pem)|제작|^backup[-_]/i.test(
             p,
           ),
         );

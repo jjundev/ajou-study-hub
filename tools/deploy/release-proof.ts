@@ -9,19 +9,23 @@ import { representativePaths } from '../representatives.js';
 import type { Observation } from '../verify-content.js';
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const fail=():never=>{throw Error('Incomplete, stale or changed runtime/build proof');};
+export function assertRuntimeFresh(manifest:BuildReport,proof:{createdAt:string}):void{
+ const age=Date.now()-Date.parse(proof.createdAt);
+ if(!Number.isFinite(age)||age<0||age>86400000||Date.parse(proof.createdAt)<Date.parse(manifest.createdAt)||!Number.isFinite(Date.parse(manifest.createdAt)))fail();
+}
 /** Reconcile evidence with the entire app manifest, never just its success flag. */
 export async function assertReleaseProof(root:string,directory:string,manifest:BuildReport,proof:any):Promise<void>{
  const exceptions:RuntimeException[]=JSON.parse(await readFile(resolve(root,'config/content-exceptions.json'),'utf8'));
  const catalog:Catalog=JSON.parse(await readFile(resolve(directory,'catalog.json'),'utf8'));
- const age=Date.now()-Date.parse(proof.createdAt);
- if(proof.version!==1||proof.scope!=='actual-app-runtime'||proof.status!=='complete'||proof.passed!==true||proof.deploymentEligible!==true||!Number.isFinite(age)||age<0||age>86400000||Date.parse(proof.createdAt)<Date.parse(manifest.createdAt)||!Number.isFinite(Date.parse(manifest.createdAt)))fail();
+ assertRuntimeFresh(manifest,proof);
+ if(proof.version!==2||!proof.sourceBinding||proof.scope!=='actual-app-runtime'||proof.status!=='complete'||proof.passed!==true||proof.deploymentEligible!==true)fail();
  if(!Array.isArray(manifest.inputs)||!manifest.inputs.length||!Array.isArray(manifest.sources)||!manifest.sources.length||!Array.isArray(manifest.issues)||!same(proof.inputs,manifest.inputs)||!same(proof.sources,manifest.sources)||proof.bundleHash!==manifest.bundleHash||proof.catalogHash!==manifest.outputs.find(f=>f.path==='catalog.json')?.sha256||!same(proof.exceptions,exceptions))fail();
  if(checkBundle(manifest.outputs,bundleLimits).length)fail();
  for(const input of manifest.inputs)if(typeof input.courseId!=='string'||!input.courseId||typeof input.path!=='string'||!input.path||!/^[a-f0-9]{64}$/.test(input.sha256))fail();
  if(new Set(manifest.inputs.map(i=>i.courseId+'\0'+i.path)).size!==manifest.inputs.length)fail();
  for(const source of manifest.sources)if(typeof source.courseId!=='string'||!source.courseId||!/^[a-f0-9]{40}$/.test(source.commit)||typeof source.dirty!=='boolean'||!Array.isArray(source.trackedPaths)||!source.trackedPaths.every(p=>typeof p==='string')||!Array.isArray(source.explicitUntracked)||!source.explicitUntracked.every(p=>typeof p==='string'))fail();
  for(const file of manifest.outputs){
-  if(!Number.isSafeInteger(file.size)||file.size<0||!/^([a-f0-9]{64})$/.test(file.sha256)||file.path.includes('\\')||file.path.includes('\0')||file.path.split('/').some(p=>!p||p==='.'||p==='..'||/^\.git$|^\.env(?:\.|$)|credentials|secrets?\.(?:json|pem)|제작|^backup[-_]|^\.reports$|^\.local$|^_worker\.js$|^\.assetsignore$/i.test(p)))fail();
+  if(!Number.isSafeInteger(file.size)||file.size<0||!/^([a-f0-9]{64})$/.test(file.sha256)||file.path.includes('\\')||file.path.includes('\0')||file.path.split('/').some(p=>!p||p==='.'||p==='..'||/^\.git$|^\.env|credentials|secrets?\.(?:json|pem)|제작|^backup[-_]|^\.reports$|^\.local$|^_worker\.js$|^\.assetsignore$/i.test(p)))fail();
  }
  for(const issue of manifest.issues){if(issue.severity!=='warning'||!matchingException(issue,exceptions))fail();}
  if(!Array.isArray(catalog.documents)||!catalog.documents.length||new Set(catalog.documents.map(d=>d.id)).size!==catalog.documents.length||proof.documentsChecked!==catalog.documents.length||!Array.isArray(proof.documents)||proof.documents.length!==catalog.documents.length)fail();

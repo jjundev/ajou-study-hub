@@ -86,3 +86,11 @@ npm run deploy:private
 이 단계는 아직 자동화된 실제 자료 검증 명령을 제공하지 않으며 사용자 실계정·독립 witness·모바일/PC 인수가 필요합니다. AC-12/13은 실제 기록이 생길 때까지 미완료입니다. 정책 조회가 바뀌거나 본문 노출/인가 실패가 있으면 성공으로 보고하지 않고 사용자 승인하에 해당 앱을 전체 차단하거나 자료 없는 검증 배포물로 회수합니다. `deploy:bootstrap`은 빈 앱 재게시 경로지만 회수 완료 자체도 보호와 본문 부재를 다시 확인해야 합니다. rollback은 현재 보호가 확인된 버전만 수동 선택하고 새 버전 URL/호스트도 다시 확인합니다. 보호 해제·이메일 추가·임시 bypass로 복구하지 않습니다.
 
 무료 사용량은 Cloudflare Dashboard의 해당 계정 Workers & Pages → 전용 Worker → Metrics 및 계정 Billing/Subscriptions와 Zero Trust 계정 플랜에서 확인합니다. 경로명이 달라지거나 Free 여부가 읽기 API로 확인되지 않으면 무료라고 추정하지 않습니다. 파일 수/단일 파일 한도 통과는 총 전송 성공·무료 API 호환성·원격 접근 인수를 보장하지 않습니다.
+
+### 원본 입력의 현재 상태와 proof v2
+
+릴리스는 최종 사본의 바이트뿐 아니라 현재 원본도 확인합니다. runtime proof v2는 검증에 사용한 프로젝트 내부의 canonical source-settings 경로, 파일 바이트 SHA-256, 해석한 roots/explicitUntracked, 수집 규칙, canonical 원본 root, 전체 catalog 선택을 기록합니다. 과거 v1 proof는 이 identity가 없으므로 재검증이 필요합니다. `.local/sources.json` 등 설정 파일의 공백만 바뀌어도 기존 proof를 재사용하지 않습니다.
+
+배포 시작 시와 두 번째 live Access snapshot 직후 각각 새 Git batch로 추적 목록·HEAD·dirty 상태·선택을 확인하고, 모든 manifest 입력의 현재 허용 경로/realpath와 바이트 hash를 대조합니다. 검사 도중의 추적·바이트·설정 변화도 다시 확인합니다. 원본의 수정/삭제, git 추적 해제/추가, explicitUntracked 변경, root 전환은 업로드를 막습니다. 이 경우 자동으로 다시 빌드하거나 원본을 수정하지 않습니다. 필요한 변경을 검토하고 수동 build/verify를 다시 수행하세요. 동일 root를 공유하는 합성 fixture도 호출마다 새 Git batch를 사용하며 파일마다 Git 프로세스를 시작하지 않습니다.
+
+`.envrc`, `.envproduction`, 중첩 `.ENV*`를 포함해 어느 경로 세그먼트에서든 대소문자 구분 없이 `.env`로 시작하는 파일을 수집기와 릴리스가 함께 거절합니다. 업로드 직전에는 runtime 및 Access proof의 나이도 다시 확인하므로 대형 사본을 준비하는 동안 24시간을 넘긴 증거로 게시할 수 없습니다.
