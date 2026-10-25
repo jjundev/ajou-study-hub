@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawn } from 'node:child_process';
+import { validateSettings, assertFreeSubscriptions } from './access.js';
 import { checkBundle, bundleLimits } from '../content/preflight.js';
 import { writeReport, type BuildReport } from '../content/report.js';
 const project = fileURLToPath(new URL('../../', import.meta.url));
@@ -73,7 +75,44 @@ export async function buildBootstrap(outputDir: string): Promise<{directory:stri
     return {directory,sentinelPaths:Object.keys(sentinels),bundleHash};
   } finally { await validateBootstrapOutput(stage); await rm(stage,{recursive:true,force:true}); }
 }
+/** Upload can only consume a freshly generated, empty canonical bootstrap; no CLI overrides. */
+export async function assertBootstrapBundle(directory:string,report:BuildReport):Promise<void>{
+  await validateBootstrapOutput(directory);
+  const outputs=await inventory(directory);
+  if(!Array.isArray(report.sources)||report.sources.length||!Array.isArray(report.inputs)||report.inputs.length||JSON.stringify(outputs)!==JSON.stringify(report.outputs)||sha(outputs.map(f=>`${f.path}\0${f.sha256}\n`).join(''))!==report.bundleHash)throw Error('Bootstrap manifest mismatch');
+  const catalog=JSON.parse(await readFile(resolve(directory,'catalog.json'),'utf8'));
+  if(JSON.stringify(catalog)!==JSON.stringify({version:1,courses:[],groups:[],documents:[]}))throw Error('Bootstrap catalog is not empty');
+}
+export async function uploadBootstrap():Promise<void>{
+  await writeReport({passed:false,status:'bootstrap-upload-started',checkedAt:new Date().toISOString()},resolve(project,'.reports/access-evidence.json'),[resolve(project,'dist')],project);
+  try {
+    const raw=JSON.parse(await readFile(resolve(project,'.local/deployment.json'),'utf8'));
+    // Worker creation precedes Access application creation. A pending app id is allowed
+    // only for this empty uploader, never for private release/protection verification.
+    const settings={...raw,accessAppId:raw.accessAppId||'00000000-0000-0000-0000-000000000000'};
+    validateSettings(settings);
+    if(settings.previewUrls.length) throw Error('Bootstrap requires disabled previews');
+    const token=process.env.CLOUDFLARE_API_TOKEN;if(!token)throw Error('No API token');
+    const request=fetch;
+    async function get(path:string){const response=await request('https://api.cloudflare.com/client/v4'+path,{headers:{Authorization:`Bearer ${token}`},redirect:'error'});if(!response.ok)throw Error('API unavailable');const value=await response.json();if(!value||value.success!==true||!('result'in value)||(value.errors?.length)||value.result_info?.total_pages>1||value.result_info?.cursor||value.result_info?.cursors?.after)throw Error('API invalid');return value.result;}
+    const account=await get('/accounts/'+settings.accountId);if(account.id!==settings.accountId)throw Error('Account mismatch');
+    const subscriptions=await get('/accounts/'+settings.accountId+'/subscriptions');
+    assertFreeSubscriptions(subscriptions);
+    const subdomain=await get('/accounts/'+settings.accountId+'/workers/subdomain');
+    if(settings.productionUrl!==`https://${settings.workerName}.${subdomain.subdomain}.workers.dev`)throw Error('Target host mismatch');
+    const result=await buildBootstrap(resolve(project,'.generated/bootstrap'));
+    const report=JSON.parse(await readFile(resolve(project,'.reports/bootstrap-build.json'),'utf8')) as BuildReport;
+    await assertBootstrapBundle(result.directory,report);
+    const outputs=await inventory(result.directory);
+    if(report.sources.length||report.inputs.length||JSON.stringify(outputs)!==JSON.stringify(report.outputs)||report.bundleHash!==result.bundleHash||sha(outputs.map(f=>`${f.path}\0${f.sha256}\n`).join(''))!==result.bundleHash)throw Error('Bootstrap changed');
+    const config=resolve(project,'.reports/bootstrap-upload.json');
+    // No user-supplied Wrangler configuration, entry point, route or asset directory.
+    await writeReport({name:settings.workerName,account_id:settings.accountId,compatibility_date:'2026-10-24',workers_dev:true,preview_urls:false,assets:{directory:result.directory,html_handling:'none',not_found_handling:'404-page'}},config,[result.directory],project);
+    await new Promise<void>((done,reject)=>{const child=spawn(process.execPath,[resolve(project,'node_modules/wrangler/bin/wrangler.js'),'deploy','--config',config],{cwd:project,env:{...process.env,CLOUDFLARE_ACCOUNT_ID:settings.accountId},stdio:'ignore'});child.once('error',reject);child.once('exit',code=>code===0?done():reject(Error('Upload failed')));});
+  }catch{throw Error('Empty bootstrap upload failed; no private upload is authorized');}
+}
 if(process.argv[1] && import.meta.url===pathToFileURL(resolve(process.argv[1])).href) void (async()=>{
-  if(process.argv.length!==2) throw Error('Usage: npm run deploy:bootstrap (local build only)');
-  console.log(JSON.stringify(await buildBootstrap(resolve(project,'.generated/bootstrap')),null,2));
-})().catch(e=>{console.error(e);process.exitCode=1;});
+  if(process.argv.length!==3||!['build','upload'].includes(process.argv[2]!)) throw Error('Expected bootstrap build or upload with no overrides');
+  if(process.argv[2]==='build') console.log(JSON.stringify(await buildBootstrap(resolve(project,'.generated/bootstrap')),null,2));
+  else {await uploadBootstrap();console.log('Empty bootstrap uploaded; Access verification remains required');}
+})().catch(()=>{console.error('Bootstrap operation failed');process.exitCode=1;});

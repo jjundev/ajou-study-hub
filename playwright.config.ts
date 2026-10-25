@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 // Only an unambiguous single hosting selection can omit the synthetic Vite server.
 // Mixed selections, flags/unknown arguments and the full suite keep it.
 const selections = process.argv.slice(2).filter(arg => arg !== 'test');
-const hostingOnly = selections.length === 1 && /(?:^|[\\/])hosting\.spec\.ts$/.test(selections[0]!);
+const hostingOnly = selections.length === 1 && /(?:^|[\\/])(?:hosting|access)\.spec\.ts$/.test(selections[0]!);
 export default defineConfig({
   workers: 3,
   testDir: './tests/e2e',

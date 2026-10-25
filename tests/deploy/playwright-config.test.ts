@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 it('omits Vite only for an unambiguous hosting-only selection', () => {
   for(const [args, hasServer] of [
     [['test','tests/e2e/hosting.spec.ts'],false],
+    [['test','tests/e2e/access.spec.ts'],false],
     [['test','tests/e2e/hosting.spec.ts','tests/e2e/reader.spec.ts'],true],
     [['test'],true],
     [['test','tests/e2e/hosting.spec.ts','--workers=1'],true],
