@@ -16,12 +16,24 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
   let nativeDestination: { url: string; generation: number; topRoute: string } | undefined;
   let active = true;
   let inFlight = false;
-  let restoring: ReaderEntry | undefined;
+  let restorationTarget: (ReaderEntry & { url: string; generation: number }) | undefined;
+  let restoring: (ReaderEntry & { url: string; cursor: string }) | undefined;
   let restoredEntry: string | undefined;
   let sourceInstance: string | undefined;
   let sourceSequence = 0;
   function observeInstance(child: ReaderWindow) {
-    if (sourceInstance !== child.__studyHubReaderInstance) { sourceInstance = child.__studyHubReaderInstance; sourceSequence = 0; }
+    if (sourceInstance === child.__studyHubReaderInstance) return;
+    sourceInstance = child.__studyHubReaderInstance;
+    sourceSequence = 0;
+    // Browser traversal can install another Document after an app replacement
+    // already fulfilled this entry. Its startup still belongs to the same saved
+    // restoration, not a new source navigation.
+    if (restorationTarget?.generation === generation && parentIsCurrent() &&
+        restorationTarget.entryId === expectedParent!.entryId &&
+        find(new URL(child.location.href))?.id === find(new URL(restorationTarget.url))?.id) {
+      restoring = {...restorationTarget,cursor:restorationTarget.url};
+      pending = restorationTarget.url;
+    }
   }
   let disposed = false;
   let approved: { instance: string; from: string; url: string; generation: number } | undefined;
@@ -71,6 +83,7 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
     allowNative(source: Window, instance: string, from: string, url: string) {
       if (host.canNavigate(source, url) && instance === (source as ReaderWindow).__studyHubReaderInstance &&
           from === source.location.href && sourceIsCurrent(new URL(from)) && (!pending || pending === from)) {
+        restorationTarget = undefined;
         nativeDestination = {url,generation,topRoute:location.hash};
       }
     },
@@ -88,18 +101,20 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
   function synchronize() {
     if (!frame || disposed || !active) return;
     try {
-      const url = new URL(frame.contentWindow!.location.href);
-      if (url.href === 'about:blank' || pending && url.href !== pending) return;
+      let url = new URL(frame.contentWindow!.location.href);
+      if (url.href === 'about:blank' || pending && url.href !== (restoring?.cursor ?? pending)) return;
       const doc = find(url);
       if (!doc || !frame.contentDocument?.querySelector('script[data-study-hub]')) { error(); return; }
       const child = frame.contentWindow as ReaderWindow;
       observeInstance(child);
       if ((child.__studyHubReaderHistory?.sequence ?? 0) > sourceSequence) return;
+      if (restoring && !parentIsCurrent()) return;
       pending = undefined;
       inFlight = false;
       if (restoring && child.__studyHubReaderHistory) {
         const entry = restoring; restoring = undefined; restoredEntry = entry.entryId;
-        child.__studyHubReaderHistory.restore(url.href, entry.state);
+        child.__studyHubReaderHistory.restore(entry.url, entry.state);
+        url = new URL(entry.url);
       }
       status.hidden = true;
       frame.hidden = false;
@@ -124,18 +139,29 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
           typeof data.instance !== 'string') return;
       if (data.intent === 'history') {
         const url = new URL(data.url), previous = new URL(data.previousUrl);
+        // Startup may advance the child URL while the parent restoration entry
+        // must stay fixed. Validate that chain against its own cursor, retaining
+        // the unchanged parent route/entry/generation guard for every message.
+        const previousIsCurrent = restoring
+          ? parentIsCurrent() && previous.href === restoring.cursor && expectedParent!.route === sourceRoute(new URL(restoring.url))
+          : sourceIsCurrent(previous);
         // Source pushes execute synchronously: the child may already be at the
         // second hash when the first message arrives. Instance + ordered sequence
         // + same document identity validate each committed state without dropping it.
         if (data.sourceUrl !== url.href || find(url)?.id !== data.documentId || find(previous)?.id !== data.documentId ||
             !Number.isSafeInteger(data.sequence) || data.sequence !== sourceSequence + 1 ||
             data.sequence > (child.__studyHubReaderHistory?.sequence ?? 0) ||
-            !['push','replace'].includes(data.history) || !sourceIsCurrent(previous) ||
+            !['push','replace'].includes(data.history) || !previousIsCurrent ||
             pending && find(new URL(pending))?.id !== data.documentId) return;
         sourceSequence = data.sequence;
+        if (restoring) {
+          restoring.cursor = url.href;
+          if (frame.contentDocument?.readyState === 'complete') synchronize();
+          return;
+        }
+        restorationTarget = undefined;
         requestedUrl = url.href;
         if (pending) pending = url.href;
-        if (restoring) { if (frame.contentDocument?.readyState === 'complete') synchronize(); return; }
         const token = generation;
         onNavigate(data.documentId, anchorOf(url), url.search || undefined,
           data.history === 'push' ? 'state-push' : 'state-replace',
@@ -168,13 +194,16 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
     expectedParent = parentContext();
     nativeDestination = undefined;
     approved = undefined;
-    restoring = entry;
+    restorationTarget = undefined;
+    restoring = undefined;
     const doc = catalog.documents.find(d => d.id === id);
     if (!doc) { error(); return; }
     const url = new URL(doc.url, location.origin);
     if (search) url.search = search;
     if (anchor) url.hash = anchor;
     requestedUrl = url.href;
+    restorationTarget = entry ? {...entry,url:url.href,generation} : undefined;
+    restoring = restorationTarget ? {...restorationTarget,cursor:url.href} : undefined;
     try {
       const current = frame && new URL(frame.contentWindow!.location.href);
       const child = frame?.contentWindow as ReaderWindow | undefined;

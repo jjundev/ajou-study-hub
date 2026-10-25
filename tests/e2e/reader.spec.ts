@@ -9,7 +9,7 @@ const docs = [
 ].map(d=>({...d,url:d.url.split('/').map(encodeURIComponent).join('/'),courseId:'c',groupId:'g',sourcePath:d.url,type:'note' as const}));
 const catalog: Catalog = {version:1,courses:[{id:'c',name:'과목',repo:'fixture',semester:'2026-2'}],groups:[{id:'g',courseId:'c',title:'묶음',sourcePath:'notes',kind:'supplement',date:null,order:1}],documents:docs};
 const documentSearch = '?mode=review&item=one&item=two&value=a%2Bb%2F%ED%95%9C%EA%B8%80';
-async function setup(page: import('@playwright/test').Page, beforeB?: () => Promise<void>) {
+async function setup(page: import('@playwright/test').Page, beforeB?: () => Promise<void>, startup = '') {
  const bundle=await build({stdin:{contents:"import {installReaderBridge} from './src/compat/reader-bridge.ts';installReaderBridge(window.__STUDY_HUB__.document.id);",resolveDir:process.cwd()},bundle:true,format:'iife',write:false});
  await page.route('**/catalog.json',r=>r.fulfill({json:catalog}));
  await page.route('**/content/**',async r=>{
@@ -18,7 +18,7 @@ async function setup(page: import('@playwright/test').Page, beforeB?: () => Prom
   if(!doc||doc.id==='doc-missing')return r.fulfill({status:404,body:'missing'});
   if (doc.id === 'doc-b') await beforeB?.();
   const content=doc.id==='doc-a' ? `<h1>A</h1><output id="screen"></output><button id="screen-next">다음 화면</button><button id="state-next">상태 화면</button><script>let screen=Number(location.hash.replace('#screen',''))||0;function renderScreen(i){screen=i;document.getElementById('screen').textContent='화면 '+i;}function nextScreen(withState){const i=screen+1;const url=i===0?location.pathname+location.search:'#screen'+i;history.pushState(withState?{screen:i,source:'original'}:null,'',url);renderScreen(i);}document.getElementById('screen-next').onclick=()=>nextScreen(false);document.getElementById('state-next').onclick=()=>nextScreen(true);addEventListener('popstate',()=>renderScreen(history.state?.screen??(Number(location.hash.replace('#screen',''))||0)));renderScreen(screen);</script><a href="연결%20설명.html${documentSearch}#part">쿼리 링크</a><button onclick="location.href='연결%20설명.html${documentSearch}#part'">쿼리 스크립트</button><a href="연결%20설명.html#part">내부 링크</a><a href="#end">아래로</a><a href="연결%20설명.html" target="_blank">별도 열기</a><a href="https://example.com/">외부</a><a href="file.pdf">PDF</a><button onclick="location.href='연결%20설명.html#part'">스크립트 이동</button><button onclick="location.hash='end'">스크립트 앵커</button><div id="end">끝</div>` : `<h1>B</h1><output id="mode"></output><script>const params=new URLSearchParams(location.search);document.getElementById('mode').textContent=params.get('mode')==='review'?'복습: '+params.getAll('item').join(',')+' / '+params.get('value'):'기본 본문';</script><a href="#after">다음 앵커</a><a href="?mode=plain#part">기본 모드</a><div id="after">다음 부분</div><div id="part">연결 부분</div><a href="a.html">시작으로</a>`;
-  return r.fulfill({contentType:'text/html',body:transformHtml('<!doctype html>'+content,doc,bundle.outputFiles[0]!.text)});
+  return r.fulfill({contentType:'text/html',body:transformHtml('<!doctype html>'+(doc.id==='doc-a'?startup:'')+content,doc,bundle.outputFiles[0]!.text)});
  });
 }
 test('follows_internal_links and restores_route through refresh/back/forward',async({page})=>{
@@ -470,4 +470,42 @@ test('stale navigation cannot replace a traversed entry with the same route', as
  await page.goForward();
  await expect.poll(()=>page.frameLocator('iframe').locator('#screen').evaluate(()=>history.state)).toEqual({screen:1});
  await expect(page).toHaveURL(/doc-a$/);
+});
+
+
+for (const transition of ['refresh','return'] as const) test(`restored startup pushes drain before saved URL and state ${transition}`, async ({page}) => {
+ await setup(page,undefined,`<script>if(sessionStorage.getItem('reader-startup')==='yes'){history.pushState({startup:1},'', '#one');history.pushState({startup:2},'', '#two');}</script>`);
+ await page.goto('/#/read/doc-a');
+ await page.frameLocator('iframe').locator('#screen').evaluate(()=>{
+   history.replaceState({screen:7,saved:true},'', '#saved');
+   sessionStorage.setItem('reader-startup','yes');
+ });
+ await expect(page).toHaveURL(/doc-a\?anchor=saved$/);
+ if (transition==='return') {
+   await page.frameLocator('iframe').getByRole('link',{name:'쿼리 링크'}).click();
+   await expect(page.frameLocator('iframe').locator('#mode')).toHaveText('복습: one,two / a+b/한글');
+ }
+ const entries=await page.evaluate(()=>history.length);
+ if (transition==='refresh') await page.reload();
+ else await page.goBack();
+ await expect(page.frameLocator('iframe').locator('#screen')).toHaveText('화면 7');
+ expect(await page.frameLocator('iframe').locator('#screen').evaluate(()=>({hash:location.hash,state:history.state})))
+   .toEqual({hash:'#saved',state:{screen:7,saved:true}});
+ await expect(page).toHaveURL(/doc-a\?anchor=saved$/);
+ await expect(page.getByText('자료를 불러오는 중입니다…',{exact:true})).not.toBeVisible();
+ expect(await page.evaluate(()=>history.length)).toBe(entries);
+ if (transition==='return') {
+   await page.goForward();
+   await expect(page.frameLocator('iframe').locator('#mode')).toHaveText('복습: one,two / a+b/한글');
+   await page.goBack();
+   await expect(page.frameLocator('iframe').locator('#screen')).toHaveText('화면 7');
+ }
+ await page.frameLocator('iframe').getByRole('button',{name:'상태 화면'}).click();
+ await expect(page.frameLocator('iframe').locator('#screen')).toHaveText('화면 8');
+ await expect(page).toHaveURL(/doc-a\?anchor=screen8$/);
+ expect(await page.evaluate(()=>history.length)).toBe(entries+(transition==='refresh'?1:0));
+ await page.goBack();
+ await expect(page.frameLocator('iframe').locator('#screen')).toHaveText('화면 7');
+ await page.goForward();
+ await expect(page.frameLocator('iframe').locator('#screen')).toHaveText('화면 8');
 });
