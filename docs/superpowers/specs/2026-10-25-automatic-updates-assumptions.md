@@ -2,7 +2,7 @@
 
 **Scope:** Existing local app at codex/study-hub-implementation; follow-on automatic source sync/private cloud release. Read-only local audit and official documentation lookup on 2026-10-25. No build, test, dependency installation, fetch, cloud mutation, login or deployment was performed.
 
-**Gate:** BLOCKED for unattended upload under the existing release contract. This returns the authentication/evidence contract to design; it does not block explaining options or writing a design proposal.
+**Gate:** CONDITIONAL for the gated roadmap after design resolution on 2026-10-25. Existing unattended upload remains blocked. Independent sync/notification/verification preparation can be planned; dependent automatic upload implementation and activation are prohibited until plan Task 5 establishes live API compatibility, explicit approval of the separate CI assurance contract, credential isolation and emergency recovery. The current user request is planning only, so no task is executed.
 
 ## Evidence ledger
 
@@ -19,7 +19,8 @@
 | 9 | GitHub Pages fits owner-only and current size | Hosting choice | Official Pages visibility and limits pages linked in design: Enterprise Cloud org access control; max1GB; stored current output1,106,504,248bytes | REFUTED | Keep proposed Cloudflare hosting instead of ordinary personal Pages |
 | 10 | Private source checkout is authorized by app GITHUB_TOKEN | Cross-repo permissions | actions/checkout official README private multi-repo section says current-repo scope | REFUTED | Separate narrowly scoped source access and event-delivery credentials |
 | 11 | Free services imply unconditional zero bill | Cost controls | Official Actions billing: included minutes/storage, billable excess; CF static requests/storage free with platform limits | REFUTED | Verify actual account tiers, billing limits and runner usage; no unconditional guarantee |
-| 12 | Add source notification workflows or poll hourly | Product/source-write choice | User asked for automation but has not selected trigger or changed previous original-write constraints | USER_DECISION | A modifies five workflow files; B changes only app with delayed scheduled checks |
+| 12 | Add source notification workflows or poll hourly | Product/source-write choice | User explicitly selected push notifications, then requested writing-plans only | VERIFIED | Plan A; no polling and no actual source writes in this planning turn |
+| 13 | Raw existing Access fingerprint is stable across deploys | Approval baseline identity | normalizeAccess hashes the full worker/apps/policies data (tools/deploy/access.ts:63); Worker deployment metadata may change | UNRESOLVED for actual response volatility | Plan a separately validated semantic protection projection; metadata-only stability and every authorization-field mutation must be tested. Live acceptance in Task 5 must confirm the selected projection |
 
 ## Verified premises for implementation planning
 
@@ -39,7 +40,7 @@
 
 ## Required next actions
 
-- Select event notifications versus scheduled checking, with explicit source-workflow scope.
-- Return unattended Access evidence/authentication to design, validate the chosen contract before dependent implementation planning.
+- Trigger choice resolved: push notifications. Implementation is not authorized by the current planning-only request.
+- Design resolution: separate CI initial-approval/current-policy evidence contract, preserving manual guard. Validate this proposal and its explicit assurance trade-off in Task 5 before dependent upload implementation; do not relabel it as current human login evidence.
 - Validate chosen Linux runtime and source shape at a bounded implementation preflight after the design gate is resolved.
 - Obtain real account setup/activation approval separately from code/design preparation. No secrets through chat.
