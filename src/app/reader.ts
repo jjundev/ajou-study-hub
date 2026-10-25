@@ -1,5 +1,6 @@
 import type { Catalog } from '../content/model.js';
 import type { ReaderHostWindow, ReaderWindow } from '../compat/reader-bridge.js';
+import { formatRoute, parseRoute } from './router.js';
 
 export type ReaderEntry = { entryId: string; state: unknown };
 export type ReaderChange = { state: unknown; previous?: { anchor?: string; search?: string; state: unknown } };
@@ -11,6 +12,7 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
   let generation = 0;
   let pending: string | undefined;
   let requestedUrl: string | undefined;
+  let expectedParent: { route: string; entryId: unknown; generation: number } | undefined;
   let nativeDestination: { url: string; generation: number; topRoute: string } | undefined;
   let active = true;
   let inFlight = false;
@@ -36,12 +38,31 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
     try { return decodeURIComponent(url.hash.slice(1)) || undefined; }
     catch { return url.hash.slice(1) || undefined; }
   };
+  const parentContext = () => ({route:formatRoute(parseRoute(location.hash)),entryId:history.state?.studyHub?.entryId,generation});
+  function parentIsCurrent() {
+    const current = parentContext();
+    return expectedParent?.generation === current.generation && expectedParent.route === current.route && expectedParent.entryId === current.entryId;
+  }
+  function sourceRoute(url: URL) {
+    const doc = find(url);
+    return doc && formatRoute({kind:'read',documentId:doc.id,anchor:anchorOf(url),search:url.search || undefined});
+  }
+  function sourceIsCurrent(url: URL) {
+    // The browser can commit another parent entry before our traversal handler
+    // advances generation. Both route and entry identity must still match.
+    return parentIsCurrent() && requestedUrl === url.href && expectedParent!.route === sourceRoute(url);
+  }
+  function rememberAcceptedParent(url: URL, token: number) {
+    if (token !== generation || sourceRoute(url) !== parentContext().route) return;
+    requestedUrl = url.href;
+    expectedParent = parentContext();
+  }
   const host = {
     canNavigate(source: Window, url: string) {
       return active && !disposed && source === frame?.contentWindow && !!find(new URL(url));
     },
     consume(source: Window, instance: string, from: string, url: string, navigationType: string) {
-      if (!active || disposed || source !== frame?.contentWindow || navigationType !== 'replace' ||
+      if (!active || disposed || !parentIsCurrent() || source !== frame?.contentWindow || navigationType !== 'replace' ||
           !approved || approved.generation !== generation || approved.instance !== instance ||
           approved.from !== from || approved.url !== url) return false;
       approved = undefined;
@@ -49,7 +70,7 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
     },
     allowNative(source: Window, instance: string, from: string, url: string) {
       if (host.canNavigate(source, url) && instance === (source as ReaderWindow).__studyHubReaderInstance &&
-          from === source.location.href && (!pending || pending === from)) {
+          from === source.location.href && sourceIsCurrent(new URL(from)) && (!pending || pending === from)) {
         nativeDestination = {url,generation,topRoute:location.hash};
       }
     },
@@ -86,7 +107,9 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
       const unowned = nativeDestination?.url === url.href && nativeDestination.generation === generation && nativeDestination.topRoute === location.hash ||
         !child.navigation && url.href !== requestedUrl;
       nativeDestination = undefined;
+      const token = generation;
       onNavigate(doc.id, anchorOf(url), url.search || undefined, unowned ? 'native-sync' : 'sync', {state:child.history.state});
+      rememberAcceptedParent(url, token);
     } catch { error(); }
   }
   function message(event: MessageEvent) {
@@ -107,20 +130,24 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
         if (data.sourceUrl !== url.href || find(url)?.id !== data.documentId || find(previous)?.id !== data.documentId ||
             !Number.isSafeInteger(data.sequence) || data.sequence !== sourceSequence + 1 ||
             data.sequence > (child.__studyHubReaderHistory?.sequence ?? 0) ||
-            !['push','replace'].includes(data.history) || pending && find(new URL(pending))?.id !== data.documentId) return;
+            !['push','replace'].includes(data.history) || !sourceIsCurrent(previous) ||
+            pending && find(new URL(pending))?.id !== data.documentId) return;
         sourceSequence = data.sequence;
         requestedUrl = url.href;
         if (pending) pending = url.href;
         if (restoring) { if (frame.contentDocument?.readyState === 'complete') synchronize(); return; }
+        const token = generation;
         onNavigate(data.documentId, anchorOf(url), url.search || undefined,
           data.history === 'push' ? 'state-push' : 'state-replace',
           {state:data.state,previous:{anchor:anchorOf(previous),search:previous.search || undefined,state:data.previousState}});
+        rememberAcceptedParent(url, token);
         return;
       }
       if (data.sourceUrl !== current.href || pending && pending !== current.href) return;
       if (data.intent === 'sync') {
         if (data.url === current.href) synchronize();
       } else if (data.intent === 'navigate' && (data.history === undefined || data.history === 'push' || data.history === 'replace')) {
+        if (!sourceIsCurrent(current)) return;
         const url = new URL(data.url);
         const doc = find(url);
         if (doc) onNavigate(doc.id, anchorOf(url), url.search || undefined, data.history ?? 'push');
@@ -138,6 +165,7 @@ export function mountReader(root: HTMLElement, catalog: Catalog,
   function open(id: string, anchor?: string, search?: string, entry?: ReaderEntry) {
     active = true;
     const token = ++generation;
+    expectedParent = parentContext();
     nativeDestination = undefined;
     approved = undefined;
     restoring = entry;

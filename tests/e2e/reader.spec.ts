@@ -411,3 +411,63 @@ test('a child sync cannot overwrite a traversed route before its handler runs', 
  expect(await page.evaluate(()=>(window as any).injectedSync)).toBeGreaterThan(0);
  expect(await page.evaluate(()=>(window as any).overwrittenRoute??false)).toBe(false);
 });
+
+for (const intent of ['navigate','history'] as const) test(`a stale child ${intent} cannot replace a traversed route or its forward branch`, async ({page}) => {
+ await page.addInitScript(intent => {
+   if (window !== top) return;
+   addEventListener('popstate', () => {
+     const child=document.querySelector('iframe')?.contentWindow as any;
+     if (location.hash!=='#/read/doc-a' || !child?.__studyHubReaderInstance || child.location.pathname.endsWith('/a.html')) return;
+     const committed=location.hash;
+     const previousUrl=child.location.href;
+     const previousState=child.history.state;
+     const destination=new URL(previousUrl); destination.hash='after';
+     let data:any={type:'study-hub:navigate',documentId:'doc-b',url:destination.href,
+       sourceUrl:previousUrl,instance:child.__studyHubReaderInstance,intent,history:'push'};
+     if (intent==='history') {
+       // Commit through the actual source wrapper, then deliver its valid ordered
+       // payload at the boundary before the queued postMessage would normally run.
+       child.history.pushState({late:true},'',destination.href);
+       data={...data,sourceUrl:child.location.href,sequence:child.__studyHubReaderHistory.sequence,
+         state:child.history.state,previousUrl,previousState};
+     }
+     window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:child,data}));
+     (window as any).staleIntentProbe={committed,after:location.hash};
+   },{capture:true});
+ },intent);
+ await setup(page); await page.goto('/#/read/doc-a');
+ await page.frameLocator('iframe').getByRole('link',{name:'쿼리 링크'}).click();
+ await expect(page.frameLocator('iframe').locator('#mode')).toHaveText('복습: one,two / a+b/한글');
+ await page.goBack();
+ expect(await page.evaluate(()=>(window as any).staleIntentProbe)).toEqual({committed:'#/read/doc-a',after:'#/read/doc-a'});
+ await expect(page).toHaveURL(/doc-a$/);
+ await expect(page.frameLocator('iframe').getByRole('heading',{name:'A',exact:true})).toBeVisible();
+ await page.goForward();
+ await expect(page).toHaveURL(/doc-b\?anchor=part/);
+ await expect(page.frameLocator('iframe').locator('#mode')).toHaveText('복습: one,two / a+b/한글');
+});
+
+test('stale navigation cannot replace a traversed entry with the same route', async ({page}) => {
+ await page.addInitScript(() => {
+   if (window!==top) return;
+   addEventListener('popstate',()=>{
+     const child=document.querySelector('iframe')?.contentWindow as any;
+     if (location.hash!=='#/read/doc-a' || history.state?.studyHub?.state?.screen===1 || !child?.__studyHubReaderInstance) return;
+     const entry=history.state.studyHub.entryId;
+     const destination=new URL(child.location.href); destination.hash='end';
+     window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:child,data:{
+       type:'study-hub:navigate',documentId:'doc-a',url:destination.href,sourceUrl:child.location.href,
+       instance:child.__studyHubReaderInstance,intent:'navigate',history:'push',
+     }}));
+     (window as any).sameRouteProbe={route:location.hash,sameEntry:history.state.studyHub.entryId===entry};
+   },{capture:true});
+ });
+ await setup(page); await page.goto('/#/read/doc-a');
+ await page.frameLocator('iframe').locator('#screen').evaluate(()=>history.pushState({screen:1},'',location.href));
+ await expect.poll(()=>page.evaluate(()=>history.state?.studyHub?.state?.screen)).toBe(1);
+ await page.goBack();
+ expect(await page.evaluate(()=>(window as any).sameRouteProbe)).toEqual({route:'#/read/doc-a',sameEntry:true});
+ await page.goForward();
+ await expect.poll(()=>page.frameLocator('iframe').locator('#screen').evaluate(()=>history.state)).toEqual({screen:1});
+ await expect(page).toHaveURL(/doc-a$/);
+});
