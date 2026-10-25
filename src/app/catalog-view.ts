@@ -125,7 +125,17 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog, onSelect: (doc
   }
   updateExpanded(); render(); renderSelection();
   return {
-    setSelection(id: string | null) { selected = id; renderSelection(); renderGroups(); },
+    setSelection(id: string | null, preserveReader = false) {
+      selected = id;
+      if (preserveReader) {
+        const doc = catalog.documents.find(d => d.id === id);
+        const heading = reader.querySelector('h2');
+        if (heading && doc) heading.textContent = doc.title;
+        const course = reader.querySelector('.reader-course');
+        if (course && doc) course.textContent = catalog.courses.find(c => c.id === doc.courseId)?.name ?? '';
+      } else renderSelection();
+      renderGroups();
+    },
     setBrowseState(next: BrowseState) { state = { ...next }; render(); },
     destroy() { shell.remove(); },
   };

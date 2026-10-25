@@ -142,7 +142,7 @@ export async function buildContent(options: {
       await build({
         stdin: {
           contents:
-            "import {installStorage} from './src/compat/storage.ts';import {storageRules} from './config/storage-rules.ts';installStorage(window.__STUDY_HUB__.namespace,storageRules);",
+            "import {installStorage} from './src/compat/storage.ts';import {storageRules} from './config/storage-rules.ts';installStorage(window.__STUDY_HUB__.namespace,storageRules);import {installReaderBridge} from './src/compat/reader-bridge.ts';installReaderBridge(window.__STUDY_HUB__.document.id);",
           resolveDir: process.cwd(),
           loader: "ts",
         },

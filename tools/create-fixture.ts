@@ -7,7 +7,7 @@ for (const course of courses) {
   const fixture = await createSourceFixture();
   await fixture.write(
     "복습노트/1001/정리노트.html",
-    `<!doctype html><title>${course.name} 합성 자료</title><h1>합성 학습 자료</h1>`,
+    `<!doctype html><title>${course.name} 합성 자료</title><h1>합성 학습 자료</h1><a href="#section">합성 앵커</a><div id="section">합성 본문</div><button onclick="location.hash='section'">합성 스크립트 이동</button>`,
   );
   await fixture.track();
   settings.roots[course.id] = fixture.root;
