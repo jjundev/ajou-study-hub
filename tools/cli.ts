@@ -8,6 +8,7 @@ import { writeReport, validateReportPath, type BuildReport } from "./content/rep
 import { checkBundle, bundleLimits } from "./content/preflight.js";
 import type { SourceSettings } from "./content/source.js";
 import { parseAppArguments, validateAppOutput } from './app-build-safety.js';
+import { applyHosting } from './deploy/bootstrap.js';
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!["content:build", "build", "dev"].includes(command ?? "")) throw new Error("Expected content:build, build, or dev");
@@ -62,6 +63,8 @@ async function main() {
     child.once('exit', code => code === 0 ? done() : reject(Error(`Vite exited with ${code}`)));
   });
   if (command === 'build') {
+    await validateAppOutput(Object.values(settings.roots), resolve(sources));
+    await applyHosting(outputDir);
     const report = JSON.parse(await readFile(result.reportPath, 'utf8')) as BuildReport;
     const outputs: BuildReport['outputs'] = [];
     const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');

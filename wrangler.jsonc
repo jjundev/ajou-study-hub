@@ -1,0 +1,9 @@
+{
+  "name": "ajou-study-hub",
+  "compatibility_date": "2026-10-24",
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "none",
+    "not_found_handling": "404-page"
+  }
+}

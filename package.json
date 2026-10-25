@@ -14,7 +14,7 @@
     "dev": "tsx tools/cli.ts dev",
     "test:e2e": "playwright test",
     "verify:content": "tsx tools/verify-content.ts",
-    "hosting:dev": "wrangler dev",
+    "hosting:dev": "wrangler dev --local --ip 127.0.0.1",
     "deploy:bootstrap": "tsx tools/deploy/bootstrap.ts",
     "access:verify": "tsx tools/deploy/access.ts",
     "deploy:private": "tsx tools/deploy/release.ts"
