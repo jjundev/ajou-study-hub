@@ -2,7 +2,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
-    // Integration fixtures launch real Git processes; bound Windows worker contention.
-    testTimeout: 15000,
+    // Real Git startup is slow on Windows; bound contention and allow complete assertions.
+    maxWorkers: 3,
+    testTimeout: 60000,
   },
 });

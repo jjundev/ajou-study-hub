@@ -115,7 +115,7 @@ test("refuses unexplained missing, sensitive and production-log links", async ()
       await rm(outputDir, { recursive: true, force: true });
     }
   }
-}, 30000);
+}, 120000);
 test("rejects output paths outside project generated directory", async () => {
   await expect(
     buildContent({
