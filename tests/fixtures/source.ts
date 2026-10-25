@@ -14,6 +14,7 @@ export async function createSourceFixture() {
   git("add", ".");
   git("commit", "-qm", "fixture");
   const config = structuredClone(courses[0]!);
+  config.extraFiles = []; // Unit fixtures opt into their own dynamic dependencies.
   const settings: SourceSettings = {
     roots: { [config.id]: root },
     explicitUntracked: {},
@@ -22,7 +23,7 @@ export async function createSourceFixture() {
     root,
     config,
     settings,
-    write: async (path: string, text: string) => {
+    write: async (path: string, text: string | Uint8Array) => {
       await mkdir(dirname(join(root, path)), { recursive: true });
       await writeFile(join(root, path), text);
     },

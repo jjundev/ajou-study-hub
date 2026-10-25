@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "courseId": "ml-basics",
+    "sourcePath": "강의노트/추가 강의/eli5_lecture11_statistical_inference_part2.html",
+    "target": "https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&display=swap",
+    "reason": "Original CSS imports Pretendard from Google Fonts, which does not provide that family. Direct request on 2026-10-25 returned HTTP 400 text/html with 'Font family not found'; Chromium blocks this HTML response as CSS (ERR_BLOCKED_BY_ORB). The source font stack supplies fallbacks; all content and behavior remain checked. Exact external font request only; original sources remain unchanged.",
+    "runtime": [
+      {"kind": "requestfailed", "reason": "net::ERR_BLOCKED_BY_ORB"},
+      {"kind": "http", "reason": "HTTP 400"}
+    ]
+  }
+]

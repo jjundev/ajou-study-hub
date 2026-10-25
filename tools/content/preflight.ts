@@ -22,6 +22,7 @@ export function checkBundle(
   return issues;
 }
 export type ContentException = {
+  runtime?: { kind: string; reason: string }[];
   courseId: string;
   sourcePath: string;
   target: string;
@@ -34,6 +35,7 @@ export function matchingException(
 ): ContentException | undefined {
   return exceptions.find(
     (e) =>
+      !e.runtime &&
       e.courseId === issue.courseId &&
       e.sourcePath === issue.sourcePath &&
       e.target === issue.target &&

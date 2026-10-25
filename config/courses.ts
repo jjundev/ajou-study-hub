@@ -12,6 +12,7 @@ export type CourseConfig = Course & {
   typeRules: TypeRule[];
   extraFiles: string[];
 };
+import { logicWorkbookFigures } from "./dynamic-assets.js";
 const additionalRoots: Record<string, string[]> = {
   "circuits-2": ["workbook/pdf/ch09-문제.pdf", "workbook/pdf/ch10-문제.pdf"],
   "data-structures": [
@@ -57,5 +58,5 @@ export const courses: CourseConfig[] = [
   allowedRoots: ["복습노트", ...(additionalRoots[id!] ?? [])],
   groupRules,
   typeRules,
-  extraFiles: [],
+  extraFiles: id === "logic-lab" ? logicWorkbookFigures : [],
 }));

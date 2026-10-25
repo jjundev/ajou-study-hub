@@ -58,7 +58,7 @@ export async function validateReportPath(
   }
 }
 export async function writeReport(
-  report: BuildReport,
+  report: unknown,
   path: string,
   exclusions: string[] = [],
 ): Promise<void> {

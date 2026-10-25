@@ -1,0 +1,27 @@
+# Content runtime verification
+
+Default `npm test` and `npm run test:e2e` use synthetic repositories only. Actual materials are opt-in and original repositories are read-only:
+
+```powershell
+npm run build -- --sources .local/sources.json
+npm run typecheck
+npm test
+npm run test:e2e
+npm run verify:content -- --sources .local/sources.json
+```
+
+Run these sequentially on Windows. Do not run Vite content replacement alongside another build. The actual command uses the current `dist` and `.reports/app-build.json`; it does not build or silently accept an existing HTTP server. Rebuild first after content or application changes. Task 8 hosting additions change the bundle hash and require fresh runtime evidence.
+
+The CLI validates the complete app manifest, every output byte, exact output inventory, current tracked source provenance and input hashes, and current listed catalog. It owns a random-port IPv4 loopback server. Its normal server serves only manifest paths and verifies served bytes against their recorded hash. It records all response statuses, request failures, uncaught script errors, decoded images, and document titles for every listed and linked HTML in Chromium, with three concurrent pages. All embedded workbook JSON is recursively audited, including image tags nested in solution HTML strings; every known dynamic figure must be in the manifest even if a representative does not select that page.
+
+Seven representative documents run inside the actual reader in Chromium, Firefox, and WebKit at 390 and 1440 px (42 combinations). Checks use real buttons, keyboard actions, inputs and history traversal: source Next/Back/Forward/refresh, question choice and solution disclosure, simulation inputs/reset and determinant readout, generated workbook pages/images, and inline circuits problems and summary. Native malformed object/array/null storage values are inserted before compatibility code, then the source UI must work. The two 1012 courses must retain distinct native storage keys. A chosen biology answer must survive refresh in sessionStorage and be absent from a fresh tab session. Existing storage schemas cover the observed source keys; no new schema was needed.
+
+`.reports/verification.json` is invalidated to a non-eligible running result before a new actual check. The final report includes the final app bundle hash, catalog hash, source input hashes, full document evidence, dynamic assets, representative assertions and visible warnings. Output and source hashes are checked again after browsing. Only a complete, passing actual CLI run can set `deploymentEligible:true`. The public `verifyContent({baseUrl,catalog,reportDir})` load scanner always returns `deploymentEligible:false`; fixture or load-only results cannot authorize deployment. Reports use the shared atomic writer restricted to project `.reports`, rejecting source/output overlap and symlink destinations. A failed preflight leaves the running non-eligible result; CLI failure is not proof.
+
+Local copy failures trigger a bounded original comparison. Original resources are read only through the source snapshot's tracked/explicit, allowed-root and realpath checks, including targets missing from the copy manifest. An omitted tracked image that exists in the source stays a copy defect. A matching observed original failure is classified as original; inaccessible probes remain unproven copy defects. External failures are classified separately. All unexplained failures remain errors.
+
+The sole exact runtime exception in `config/content-exceptions.json` is the Google Fonts Pretendard request made by `강의노트/추가 강의/eli5_lecture11_statistical_inference_part2.html` in ml-basics. On 2026-10-25 the full URL returned HTTP 400 `Font family not found` as HTML; Chromium reported `net::ERR_BLOCKED_BY_ORB` for that CSS import. The source declares `Pretendard, sans-serif`; verification compares readable source/copy fallback text and geometry. This warning is retained, and the requested font is not claimed to load. Matching requires the exact course, document, URL, event kind and failure reason. It does not permit other CDN failures, scripts, math failures, or local resource omissions, and runtime-only entries do not authorize static collection errors.
+
+Do not commit reports, generated materials, source settings, screenshots, or authentication state. Source paths and selectors in configuration/tests are metadata; synthetic fixtures contain no copied lecture or question bodies. The local task report records first-run failures, fixes, final counts and verification commands.
+
+Readiness uses a verifier-owned zero-pending-request barrier with 500 ms of quiet, based on `request`, `requestfinished`, and `requestfailed` events. A bounded actual diagnostic reproduced Playwright's global network-idle flag timing out after all tracked requests had terminal events, following the known ORB font failure. The verifier retains that failed request as the exact warning and does not depend on the stale global idle flag. Pending requests still fail after 15 seconds with their actual URLs recorded. Browser regression tests deliberately leave both a local dynamic response and the exact known font URL unterminated: neither can be accepted, and the font exception cannot turn an unsettled request into a warning.
