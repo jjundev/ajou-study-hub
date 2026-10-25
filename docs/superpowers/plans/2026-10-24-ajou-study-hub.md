@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 24, npm, TypeScript, Vite, Vitest, Playwright, parse5, PostCSS + postcss-value-parser, esbuild(호환 코드의 classic IIFE 번들), Wrangler. 초기 UI 프레임워크·DB·Worker 서버 로직 없음. 의존성은 Task 1에서 호환 버전을 확인해 정확한 버전과 package-lock.json을 고정한다.
 
-**Spec:** [확정 PRD v1.0](../../prd/PRD.md). [사전 가정 검증](2026-10-24-ajou-study-hub-assumptions.md)도 먼저 읽는다. 작성일: 2026-10-24, 상태: 구현 전·검토용.
+**Spec:** [확정 PRD v1.0](../../prd/PRD.md). [사전 가정 검증](2026-10-24-ajou-study-hub-assumptions.md)도 먼저 읽는다. 작성일: 2026-10-24. 2026-10-25 로컬 구현·작업별 검토 완료, 실계정 실행 대기.
 
 ## Global Constraints
 
@@ -36,7 +36,7 @@
 
 ## 실행 경계와 순서
 
-이 요청은 문서 확정과 계획 작성까지다. 아래 체크박스는 모두 미실행이다. 구현은 계획 검토와 실행 방식 선택 후 시작한다. Task 1→2→3→4는 명령행으로 검증 가능한 수집 결과, Task 5→6→7은 로컬 학습 앱, Task 8→9→10은 보호된 배포를 만든다. 서로 같은 목록·파일 계약을 쓰는 하나의 제품이므로 하나의 계획 안에서 단계별로 완료한다.
+문서 확정과 계획 작성 뒤 사용자가 subagent-driven-development 실행을 선택했다. 체크박스는 실제 구현·검증 진행을 반영하며, 실계정 접근 제어 설정과 외부 배포는 별도의 실행 게이트를 따른다. Task 1→2→3→4는 명령행으로 검증 가능한 수집 결과, Task 5→6→7은 로컬 학습 앱, Task 8→9→10은 보호된 배포를 만든다. 서로 같은 목록·파일 계약을 쓰는 하나의 제품이므로 하나의 계획 안에서 단계별로 완료한다.
 
 계정 접근·실제 허용 이메일은 Task 1~8의 전제 조건이 아니다. Task 9에서 계정·무료 플랜·허용 이메일·Access 관리 권한·다른 계정 검증 수단이 준비되지 않으면 그 이후만 대기하고, 로컬 완료와 클라우드 완료를 구분해 보고한다. 생명과학의 로컬 변경을 취소하거나 자동 커밋·push하지 않는다.
 
@@ -101,8 +101,8 @@ type Issue = { code: string; courseId: string; sourcePath: string;
 - `SourceSettings`는 로컬 설정 JSON 타입이다. `SourceSnapshot`은 `{catalogInputs:SourceEntry[], readFile:(courseId:string,path:string)=>Promise<Uint8Array>, provenance:SourceProvenance[]}`. `SourceEntry={courseId:string,groupPath:string,sourcePath:string}`, `SourceProvenance={courseId:string,commit:string,dirty:boolean,trackedPaths:string[],explicitUntracked:string[]}`; 이 타입은 `source.ts`가 소유한다. readFile은 상대 경로·realpath·추적 여부·허용 경로를 다시 검사하고 선택 파일의 입력 바이트·해시를 기록한다. Task 2에서 URL 정규화와 공유 경로 판정을 `paths.ts`로 추출한다.
 - 테스트 도우미 `createSourceFixture():Promise<{root:string;config:CourseConfig;settings:SourceSettings;write:(path:string,text:string)=>Promise<void>;track:()=>Promise<void>;dispose:()=>Promise<void>}>`는 임시 Git 레포를 만들고 각 테스트가 finally에서 회수한다. `tools/create-fixture.ts`는 같은 도우미로 5과목 합성 입력과 `.local/fixture-sources.json`을 만들며 `npm run fixtures:create`로 실행한다.
 
-- [ ] **Step 1: 실행 환경과 테스트 도구를 준비한다.** Node 24·npm 버전, Git 상태를 확인하고 Node `>=24 <25`를 고정한다. TypeScript·Vitest·tsx와 이후 사용할 도구의 peer/engine 호환을 확인해 exact 버전으로 설치하고 lockfile을 만든다. `typecheck`, `test`, `content:build`, `build`, `dev`, `test:e2e`, `verify:content`, `hosting:dev`, `deploy:bootstrap`, `access:verify`, `deploy:private` 명령 이름을 예약한다. 아직 구현되지 않은 명령은 성공을 가장하는 stub을 두지 않는다.
-- [ ] **Step 2: `catalog.test.ts`에 실패 테스트를 쓴다.** 합성 레포에 날짜·실험·보충 그룹, 제목 없는 문서, 알려지지 않은 파일명, `.backup-*`·제작 HTML, untracked HTML을 만든다. 추가/삭제 시 목록 증감과 제목만 변경했을 때 ID 유지를 검사한다.
+- [x] **Step 1: 실행 환경과 테스트 도구를 준비한다.** Node 24·npm 버전, Git 상태를 확인하고 Node `>=24 <25`를 고정한다. TypeScript·Vitest·tsx와 이후 사용할 도구의 peer/engine 호환을 확인해 exact 버전으로 설치하고 lockfile을 만든다. `typecheck`, `test`, `content:build`, `build`, `dev`, `test:e2e`, `verify:content`, `hosting:dev`, `deploy:bootstrap`, `access:verify`, `deploy:private` 명령 이름을 예약한다. 아직 구현되지 않은 명령은 성공을 가장하는 stub을 두지 않는다.
+- [x] **Step 2: `catalog.test.ts`에 실패 테스트를 쓴다.** 합성 레포에 날짜·실험·보충 그룹, 제목 없는 문서, 알려지지 않은 파일명, `.backup-*`·제작 HTML, untracked HTML을 만든다. 추가/삭제 시 목록 증감과 제목만 변경했을 때 ID 유지를 검사한다.
 
 ```ts
 // tests: lists_only_tracked_entry_html, stable_ids, updates_catalog, classifies_types
@@ -112,9 +112,9 @@ expect(experiment.date).toBeNull();
 expect(unknown.type).toBe('other');
 ```
 
-- [ ] **Step 3: `npm test -- tests/content/catalog.test.ts`를 실행한다.** 아직 없는 source/catalog export 때문에 FAIL이어야 한다.
-- [ ] **Step 4: 입력·목록 함수를 구현한다.** `git ls-files -z`로 추적 파일을 얻고 main을 checkout하거나 fetch하지 않는다. MMDD는 최신순, 실험은 번호순, 보충은 별도 마지막으로 정렬한다. `정리노트*→note`, `복습문제*·실험NN_기출문제*·문제풀이.html→review`, `문제설명*·실험NN_문제설명*·실험NN_기출풀이*→explanation`, `인터렉티브*·인터랙티브*→interactive`; 나머지는 other다. 과목별 규칙 순서로 판정하고 parse5로 title을 추출한다. 숨김·백업·제작 파일은 시작 목록에서 제외한다.
-- [ ] **Step 5: 테스트와 `npm run typecheck`를 실행해 PASS를 확인하고 명시한 파일만 커밋한다.** `git add package.json package-lock.json .node-version tsconfig.json vitest.config.ts .gitignore config src/content tools/content/source.ts tools/content/catalog.ts tools/create-fixture.ts tests`; `git commit -m "feat: generate course catalog from local git sources"`. 도구 설치 자체를 기능 검증으로 보고하지 않는다.
+- [x] **Step 3: `npm test -- tests/content/catalog.test.ts`를 실행한다.** 아직 없는 source/catalog export 때문에 FAIL이어야 한다.
+- [x] **Step 4: 입력·목록 함수를 구현한다.** `git ls-files -z`로 추적 파일을 얻고 main을 checkout하거나 fetch하지 않는다. MMDD는 최신순, 실험은 번호순, 보충은 별도 마지막으로 정렬한다. `정리노트*→note`, `복습문제*·실험NN_기출문제*·문제풀이.html→review`, `문제설명*·실험NN_문제설명*·실험NN_기출풀이*→explanation`, `인터렉티브*·인터랙티브*→interactive`; 나머지는 other다. 과목별 규칙 순서로 판정하고 parse5로 title을 추출한다. 숨김·백업·제작 파일은 시작 목록에서 제외한다.
+- [x] **Step 5: 테스트와 `npm run typecheck`를 실행해 PASS를 확인하고 명시한 파일만 커밋한다.** `git add package.json package-lock.json .node-version tsconfig.json vitest.config.ts .gitignore config src/content tools/content/source.ts tools/content/catalog.ts tools/create-fixture.ts tests`; `git commit -m "feat: generate course catalog from local git sources"`. 도구 설치 자체를 기능 검증으로 보고하지 않는다.
 
 ## Task 2: 연결 파일 수집과 허용 범위 검사 (AC-03, AC-11)
 
@@ -126,7 +126,7 @@ expect(unknown.type).toBe('other');
 - `extractReferences(text:string, kind:'html'|'css'):string[]` in `references.ts`; `collectDependencies(snapshot:SourceSnapshot,catalog:Catalog,configs:CourseConfig[]):Promise<FileGraph>` in `collect.ts`.
 - `FileGraph={files:CollectedFile[];linkedDocuments:DocumentInfo[];issues:Issue[]}`, `CollectedFile={courseId:string;sourcePath:string;bytes:Uint8Array;sha256:string;kind:'html'|'css'|'asset'}`. Node 전용 타입은 `collect.ts`가 소유한다.
 
-- [ ] **Step 1: `collect.test.ts`에 실패 테스트를 쓴다.** `한글 폴더/a%20b.html?mode=1#풀이`, `.pack/x.css`의 `@import`·폰트 url, `.assets/x.png`, 복습노트 밖 허용 PDF, 순환 HTML, srcset·SVG href·script src·base href를 포함한다. `../` 탈출·인코딩 탈출·역슬래시·Windows drive/UNC·외부 대상 심볼릭 링크·명시하지 않은 untracked 참조·서로 다른 파일의 정규화 충돌은 실패해야 한다. OS가 symlink 생성을 거부하면 실제 realpath 탈출 검사는 별도 실행 환경에서 필수 검증하고 skip을 통과로 세지 않는다.
+- [x] **Step 1: `collect.test.ts`에 실패 테스트를 쓴다.** `한글 폴더/a%20b.html?mode=1#풀이`, `.pack/x.css`의 `@import`·폰트 url, `.assets/x.png`, 복습노트 밖 허용 PDF, 순환 HTML, srcset·SVG href·script src·base href를 포함한다. `../` 탈출·인코딩 탈출·역슬래시·Windows drive/UNC·외부 대상 심볼릭 링크·명시하지 않은 untracked 참조·서로 다른 파일의 정규화 충돌은 실패해야 한다. OS가 symlink 생성을 거부하면 실제 realpath 탈출 검사는 별도 실행 환경에서 필수 검증하고 skip을 통과로 세지 않는다.
 
 ```ts
 // tests: encoded_paths_and_hidden_assets, rejects_escape, rejects_alias_collision
@@ -136,10 +136,10 @@ expect(escapeResult.kind).toBe('invalid');
 expect(graph.issues.filter(i => i.severity === 'error')).toEqual([]);
 ```
 
-- [ ] **Step 2: `npm test -- tests/content/collect.test.ts`를 실행한다.** 미구현 resolver/collector 때문에 FAIL이어야 한다.
-- [ ] **Step 3: resolver·parser·collector를 구현한다.** 쿼리·앵커를 분리하고 URL을 한 번 디코딩한 뒤 논리 경로와 realpath 모두 허용 루트·레포 안인지 확인한다. `http(s)`·protocol-relative·data URL은 외부/내장으로 구분하며 javascript 링크는 실행 파일 참조로 수집하지 않는다. HTML은 parse5, CSS는 PostCSS/value parser로 처리하고 `<base>`를 반영한다. 링크는 원본 디렉터리 관계를 유지하고 원본 root-relative 참조는 과목별 `/content/<id>/`로 재기준화한다. 레포 전체 후보 파일 목록과 외부 CDN·동적 참조 후보를 로컬 보고서에 남긴다. 동적 파일은 `extraFiles`, 추적되지 않은 파일은 `explicitUntracked` 양쪽 규칙에 맞을 때만 추가한다. 참조된 금지 경로는 조용히 제외하지 않고 error로 반환한다.
-- [ ] **Step 4: `npm test -- tests/content/collect.test.ts`와 `npm run typecheck`를 실행한다.** fixture의 허용 참조는 모두 존재하고 탈출 사례는 모두 차단되어야 한다. 실제 5개 입력을 읽어 필요한 복습노트 외 허용 경로를 `config/courses.ts`에 좁게 등록한다.
-- [ ] **Step 5: 해당 파일만 커밋한다.** `git add tools/content/paths.ts tools/content/references.ts tools/content/collect.ts tests/content/collect.test.ts tests/fixtures/source.ts config/courses.ts`; `git commit -m "feat: collect referenced assets within approved source paths"`.
+- [x] **Step 2: `npm test -- tests/content/collect.test.ts`를 실행한다.** 미구현 resolver/collector 때문에 FAIL이어야 한다.
+- [x] **Step 3: resolver·parser·collector를 구현한다.** 쿼리·앵커를 분리하고 URL을 한 번 디코딩한 뒤 논리 경로와 realpath 모두 허용 루트·레포 안인지 확인한다. `http(s)`·protocol-relative·data URL은 외부/내장으로 구분하며 javascript 링크는 실행 파일 참조로 수집하지 않는다. HTML은 parse5, CSS는 PostCSS/value parser로 처리하고 `<base>`를 반영한다. 링크는 원본 디렉터리 관계를 유지하고 원본 root-relative 참조는 과목별 `/content/<id>/`로 재기준화한다. 레포 전체 후보 파일 목록과 외부 CDN·동적 참조 후보를 로컬 보고서에 남긴다. 동적 파일은 `extraFiles`, 추적되지 않은 파일은 `explicitUntracked` 양쪽 규칙에 맞을 때만 추가한다. 참조된 금지 경로는 조용히 제외하지 않고 error로 반환한다.
+- [x] **Step 4: `npm test -- tests/content/collect.test.ts`와 `npm run typecheck`를 실행한다.** fixture의 허용 참조는 모두 존재하고 탈출 사례는 모두 차단되어야 한다. 실제 5개 입력을 읽어 필요한 복습노트 외 허용 경로를 `config/courses.ts`에 좁게 등록한다.
+- [x] **Step 5: 해당 파일만 커밋한다.** `git add tools/content/paths.ts tools/content/references.ts tools/content/collect.ts tests/content/collect.test.ts tests/fixtures/source.ts config/courses.ts`; `git commit -m "feat: collect referenced assets within approved source paths"`.
 
 ## Task 3: 저장 충돌·저장 불가·손상 데이터 호환 (AC-08, AC-09)
 
@@ -150,7 +150,7 @@ expect(graph.issues.filter(i => i.severity === 'error')).toEqual([]);
 - Produces: `installStorage(namespace:string,rules:StorageRule[]):void` in `storage.ts`; `StorageRule={pattern:string;format:'array'|'object'|'theme'|'attempt';fallback:string|null}` in `config/storage-rules.ts`.
 - `transformHtml(html:string, doc:DocumentInfo, bootstrap:string):string` in `transform.ts`. `bootstrap`는 esbuild가 만든 자기완결 classic IIFE 문자열이며 저장 규칙과 해당 문서 metadata를 포함한다. Task 6부터 reader bridge도 함께 번들한다.
 
-- [ ] **Step 1: 브라우저·변환 실패 테스트를 쓴다.** 다른 과목의 1012와 같은 과목의 서로 다른 묶음은 `od-note-read:v1:1012`를 공유하지 않고 같은 묶음의 다른 문서는 공유해야 한다. local/sessionStorage를 getter부터 차단하거나 setItem에서 quota 예외를 던져도 문제 버튼이 작동해야 한다. native storage에 불완전 JSON, `{}`, `null`을 배열 키에 넣고 정상 기본값으로 돌아오는지 검사한다.
+- [x] **Step 1: 브라우저·변환 실패 테스트를 쓴다.** 다른 과목의 1012와 같은 과목의 서로 다른 묶음은 `od-note-read:v1:1012`를 공유하지 않고 같은 묶음의 다른 문서는 공유해야 한다. local/sessionStorage를 getter부터 차단하거나 setItem에서 quota 예외를 던져도 문제 버튼이 작동해야 한다. native storage에 불완전 JSON, `{}`, `null`을 배열 키에 넣고 정상 기본값으로 돌아오는지 검사한다.
 
 ```ts
 // tests: isolates_namespaces, shares_within_group, survives_storage_failure, validates_shape
@@ -160,10 +160,10 @@ expect(recoveredArrayReadState).toEqual([]);
 expect(await page.locator('[data-test=answer]').isVisible()).toBe(true);
 ```
 
-- [ ] **Step 2: `npm test -- tests/content/transform.test.ts`와 `npm run test:e2e -- tests/e2e/storage.spec.ts`를 실행한다.** 호환 계층 미구현으로 FAIL이어야 한다. 이 단계는 아직 Vite 앱이 없으므로 Playwright `page.route`로 합성 HTML과 변환된 bootstrap만 응답하고 실제 원본·클라우드에는 접근하지 않는다.
-- [ ] **Step 3: window별 저장 adapter와 사본 주입을 구현한다.** 원래 storage 참조를 먼저 보관하고 window의 localStorage/sessionStorage getter를 namespace adapter로 교체한다. `getItem/setItem/removeItem/clear/key/length` 및 property 접근·삭제·열거의 Storage 의미를 유지하며 clear는 자기 namespace만 지운다. `study-hub:v1:<courseId>:<groupId 또는 부모경로ID>:`를 원래 키 앞에 붙이고 storage 종류는 구분한다. 예외 시 메모리 저장소로 전환한다. `od-note-read:*`, `od-review-solved:*`는 문자열 배열 `[]`, `od-panels:*`는 객체 `{}`, `od-theme`는 light/dark 문자열을 검증한다. `od-review-attempt:v1:*`는 `{version,selected,unsure}` 형태를 검증하고 손상 값은 null로 돌린다. 카드 버전 일치·선택지 유효성은 기존 readAttempt가 판단하므로 이를 재구현하지 않는다. 알 수 없는 JSON 저장 패턴은 추측으로 고치지 않고 Task 7에서 규칙 누락으로 보고한다. JSON 전역 함수는 바꾸지 않는다. parse5 source offset으로 문서의 첫 실행 스크립트 전에 metadata·bootstrap을 삽입하고 원본 bytes는 수정하지 않는다.
-- [ ] **Step 4: 두 테스트와 `npm run typecheck`를 실행한다.** 읽기·쓰기·삭제·clear·열거, 정상 JSON 중 잘못된 타입, 저장 금지 조건이 Chromium·Firefox·WebKit에서 PASS여야 한다. 부트스트랩이 원본 스크립트보다 먼저 실행되는지도 검사한다.
-- [ ] **Step 5: 해당 파일만 커밋한다.** `git add src/compat/storage.ts config/storage-rules.ts tools/content/transform.ts playwright.config.ts tests/e2e/storage.spec.ts tests/content/transform.test.ts package.json`; `git commit -m "feat: isolate document storage and recover invalid state"`.
+- [x] **Step 2: `npm test -- tests/content/transform.test.ts`와 `npm run test:e2e -- tests/e2e/storage.spec.ts`를 실행한다.** 호환 계층 미구현으로 FAIL이어야 한다. 이 단계는 아직 Vite 앱이 없으므로 Playwright `page.route`로 합성 HTML과 변환된 bootstrap만 응답하고 실제 원본·클라우드에는 접근하지 않는다.
+- [x] **Step 3: window별 저장 adapter와 사본 주입을 구현한다.** 원래 storage 참조를 먼저 보관하고 window의 localStorage/sessionStorage getter를 namespace adapter로 교체한다. `getItem/setItem/removeItem/clear/key/length` 및 property 접근·삭제·열거의 Storage 의미를 유지하며 clear는 자기 namespace만 지운다. `study-hub:v1:<courseId>:<groupId 또는 부모경로ID>:`를 원래 키 앞에 붙이고 storage 종류는 구분한다. 예외 시 메모리 저장소로 전환한다. `od-note-read:*`, `od-review-solved:*`는 문자열 배열 `[]`, `od-panels:*`는 객체 `{}`, `od-theme`는 light/dark 문자열을 검증한다. `od-review-attempt:v1:*`는 `{version,selected,unsure}` 형태를 검증하고 손상 값은 null로 돌린다. 카드 버전 일치·선택지 유효성은 기존 readAttempt가 판단하므로 이를 재구현하지 않는다. 알 수 없는 JSON 저장 패턴은 추측으로 고치지 않고 Task 7에서 규칙 누락으로 보고한다. JSON 전역 함수는 바꾸지 않는다. parse5 source offset으로 문서의 첫 실행 스크립트 전에 metadata·bootstrap을 삽입하고 원본 bytes는 수정하지 않는다.
+- [x] **Step 4: 두 테스트와 `npm run typecheck`를 실행한다.** 읽기·쓰기·삭제·clear·열거, 정상 JSON 중 잘못된 타입, 저장 금지 조건이 Chromium·Firefox·WebKit에서 PASS여야 한다. 부트스트랩이 원본 스크립트보다 먼저 실행되는지도 검사한다.
+- [x] **Step 5: 해당 파일만 커밋한다.** `git add src/compat/storage.ts config/storage-rules.ts tools/content/transform.ts playwright.config.ts tests/e2e/storage.spec.ts tests/content/transform.test.ts package.json`; `git commit -m "feat: isolate document storage and recover invalid state"`.
 
 ## Task 4: 재현 가능한 빌드와 업로드 전 검사 (AC-02, AC-03, AC-10, AC-11)
 
@@ -175,7 +175,7 @@ expect(await page.locator('[data-test=answer]').isVisible()).toBe(true);
 - `checkBundle(files:{path:string;size:number}[],limits:{maxFiles:number;maxFileBytes:number}):Issue[]` in `preflight.ts`; `writeReport(report:BuildReport,path:string):Promise<void>` in `report.ts`.
 - `BuildReport={createdAt:string;bundleHash:string;sources:SourceProvenance[];inputs:{courseId:string;path:string;sha256:string}[];outputs:{path:string;sha256:string;size:number}[];issues:Issue[]}`. `config/content-exceptions.json`의 항목은 `{courseId,sourcePath,target,reason}`이며 기본 `[]`; exact match만 warning으로 낮춘다.
 
-- [ ] **Step 1: `build.test.ts`에 실패 테스트를 쓴다.** 두 번 빌드한 catalog·배포 파일 해시 동일, 원본 전후 해시 동일, 삭제한 입력의 이전 사본 제거, 명시적 untracked만 포함, 수집 도중 입력 변경 시 중단, 설명 없는 누락·연결된 `.env`·`.git`·자격 증명·제작 로그 차단을 검사한다. 경계는 다음 값 그대로 사용한다.
+- [x] **Step 1: `build.test.ts`에 실패 테스트를 쓴다.** 두 번 빌드한 catalog·배포 파일 해시 동일, 원본 전후 해시 동일, 삭제한 입력의 이전 사본 제거, 명시적 untracked만 포함, 수집 도중 입력 변경 시 중단, 설명 없는 누락·연결된 `.env`·`.git`·자격 증명·제작 로그 차단을 검사한다. 경계는 다음 값 그대로 사용한다.
 
 ```ts
 // tests: reproducible_output, immutable_sources, no_stale_files, refuses_mixed_snapshot, limits
@@ -186,10 +186,10 @@ expect(checkBundle(twentyThousandAndOneFiles, limits)).not.toEqual([]);
 expect(checkBundle([{path:'x.pdf', size:25*1024*1024+1}], limits)).not.toEqual([]);
 ```
 
-- [ ] **Step 2: `npm test -- tests/content/build.test.ts`를 실행한다.** build/preflight 미구현 때문에 FAIL이어야 한다.
-- [ ] **Step 3: staging 빌드·보고서·CLI를 구현한다.** 선택 파일의 입력 bytes를 고정하고 완료 전 다시 해시를 확인해 변경 시 실패한다. 새 임시 디렉터리에서 완성·검사한 뒤 앱 소유 출력 디렉터리만 교체한다. 재귀 삭제·이동 전 절대 경로가 이 프로젝트의 지정 출력 하위인지 검사한다. 목록·출력 경로는 결정적으로 정렬하고 생성 시각·원본 로컬 상태 보고서는 배포물 밖에 둔다. 전체 결과물의 경로+파일 해시로 bundleHash를 만든다. 정적 참조를 변환 후 다시 검사한다. 기본 제한은 20,000개·25×1024×1024 bytes이며 앱 자산을 합친 최종 dist도 Task 8·10에서 검사한다. 예외가 없는 error는 nonzero exit다.
-- [ ] **Step 4: 위 테스트와 `npm run content:build -- --sources .local/sources.json`을 실행한다.** 실제 입력 기준을 보고서에 기록하고 설명 없는 누락이 0일 때만 성공한다. 현재 입력이 사전 조사와 같다면 5/53/217을 확인하며, 다르면 추가·삭제 경로와 이유를 보고한다. 원본 hash 불변을 확인한다.
-- [ ] **Step 5: 해당 파일만 커밋한다.** `git add tools/content/build.ts tools/content/preflight.ts tools/content/report.ts tools/cli.ts config/content-exceptions.json tests/content/build.test.ts package.json .gitignore`; `git commit -m "feat: build reproducible content bundles with preflight checks"`.
+- [x] **Step 2: `npm test -- tests/content/build.test.ts`를 실행한다.** build/preflight 미구현 때문에 FAIL이어야 한다.
+- [x] **Step 3: staging 빌드·보고서·CLI를 구현한다.** 선택 파일의 입력 bytes를 고정하고 완료 전 다시 해시를 확인해 변경 시 실패한다. 새 임시 디렉터리에서 완성·검사한 뒤 앱 소유 출력 디렉터리만 교체한다. 재귀 삭제·이동 전 절대 경로가 이 프로젝트의 지정 출력 하위인지 검사한다. 목록·출력 경로는 결정적으로 정렬하고 생성 시각·원본 로컬 상태 보고서는 배포물 밖에 둔다. 전체 결과물의 경로+파일 해시로 bundleHash를 만든다. 정적 참조를 변환 후 다시 검사한다. 기본 제한은 20,000개·25×1024×1024 bytes이며 앱 자산을 합친 최종 dist도 Task 8·10에서 검사한다. 예외가 없는 error는 nonzero exit다.
+- [x] **Step 4: 위 테스트와 `npm run content:build -- --sources .local/sources.json`을 실행한다.** 실제 입력 기준을 보고서에 기록하고 설명 없는 누락이 0일 때만 성공한다. 현재 입력이 사전 조사와 같다면 5/53/217을 확인하며, 다르면 추가·삭제 경로와 이유를 보고한다. 원본 hash 불변을 확인한다.
+- [x] **Step 5: 해당 파일만 커밋한다.** `git add tools/content/build.ts tools/content/preflight.ts tools/content/report.ts tools/cli.ts config/content-exceptions.json tests/content/build.test.ts package.json .gitignore`; `git commit -m "feat: build reproducible content bundles with preflight checks"`.
 
 ## Task 5: 과목·묶음·자료 탐색 화면 (AC-01, AC-02, AC-06)
 
@@ -200,7 +200,7 @@ expect(checkBundle([{path:'x.pdf', size:25*1024*1024+1}], limits)).not.toEqual([
 - Produces: `mountCatalog(root:HTMLElement,catalog:Catalog,onSelect:(documentId:string)=>void,onBrowse?:(state:BrowseState)=>void):{setSelection:(id:string|null)=>void;setBrowseState:(state:BrowseState)=>void;destroy:()=>void}` in `catalog-view.ts`. `BrowseState={courseId?:string;groupId?:string;query?:string}`도 이 파일이 export한다. Task 6에서 onBrowse를 router와 연결하고 setBrowseState는 복원 중 변경 이벤트를 재발행하지 않는다.
 - `main.ts`는 목록 fetch·version/필수 필드 검사·로딩·실패 후 재시도를 담당한다. reader 호출은 Task 6에서 연결한다.
 
-- [ ] **Step 1: `catalog.spec.ts`에 실패 테스트를 쓴다.** 390×844와 1440×900에서 5과목·묶음별 제목·날짜/실험 번호·실제 유형·자료 수를 검사한다. 날짜·묶음명·자료 제목으로 검색되고 본문 전용 검색어는 결과에 없어야 한다. 없는 유형 버튼 없음, 검색 결과 0에서 지우기 복구, 목록 요청 실패 후 재시도, keyboard 선택과 모바일 목록 접기/열기를 검사한다.
+- [x] **Step 1: `catalog.spec.ts`에 실패 테스트를 쓴다.** 390×844와 1440×900에서 5과목·묶음별 제목·날짜/실험 번호·실제 유형·자료 수를 검사한다. 날짜·묶음명·자료 제목으로 검색되고 본문 전용 검색어는 결과에 없어야 한다. 없는 유형 버튼 없음, 검색 결과 0에서 지우기 복구, 목록 요청 실패 후 재시도, keyboard 선택과 모바일 목록 접기/열기를 검사한다.
 
 ```ts
 // tests: browses_courses, searches_metadata_only, empty_and_error_states, responsive_catalog
@@ -209,10 +209,10 @@ expect(await page.locator('[data-material-type=review][disabled]').count()).toBe
 expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 ```
 
-- [ ] **Step 2: `npm run test:e2e -- tests/e2e/catalog.spec.ts`를 실행한다.** 앱 화면 미구현 때문에 FAIL이어야 한다.
-- [ ] **Step 3: 탐색 화면과 빌드 설정을 구현한다.** 한국어 UI, semantic button/nav/main, 분명한 포커스, `aria-expanded` 목록 토글과 검색 label을 둔다. 768px 미만은 접을 수 있는 목록, 이상은 목록·본문 2열로 구성한다. 과목명·문서 제목은 textContent로 출력한다. 자료 수는 listed HTML만 집계한다. Vite는 앱 코드만 번들하고 기존 HTML은 재해석하지 않으며 수집 자산을 publicDir로 복사한다. `npm run build`는 `content:build` 후 Vite build를 실행한다. `dev`도 먼저 목록·사본을 생성해 같은 결과를 제공한다. 기본 E2E는 합성 입력만 쓰고 실제 자료 검사는 `verify:content`, 실계정 검사는 `access:verify` 명령으로만 활성화한다.
-- [ ] **Step 4: `npm run fixtures:create`, `npm run build -- --sources .local/fixture-sources.json`, `npm run test:e2e -- tests/e2e/catalog.spec.ts`, `npm run typecheck`를 실행한다.** `tools/cli.ts`가 `--sources`를 소비하고 Vite에는 전달하지 않도록 연결한다. 스크린샷으로 두 폭의 앱 UI 잘림·목록 접기·제목 가독성을 확인한다.
-- [ ] **Step 5: 해당 파일만 커밋한다.** `git add index.html src/main.ts src/app/catalog-view.ts src/app/styles.css vite.config.ts tests/e2e/catalog.spec.ts package.json playwright.config.ts`; `git commit -m "feat: add responsive course and material navigation"`.
+- [x] **Step 2: `npm run test:e2e -- tests/e2e/catalog.spec.ts`를 실행한다.** 앱 화면 미구현 때문에 FAIL이어야 한다.
+- [x] **Step 3: 탐색 화면과 빌드 설정을 구현한다.** 한국어 UI, semantic button/nav/main, 분명한 포커스, `aria-expanded` 목록 토글과 검색 label을 둔다. 768px 미만은 접을 수 있는 목록, 이상은 목록·본문 2열로 구성한다. 과목명·문서 제목은 textContent로 출력한다. 자료 수는 listed HTML만 집계한다. Vite는 앱 코드만 번들하고 기존 HTML은 재해석하지 않으며 수집 자산을 publicDir로 복사한다. `npm run build`는 `content:build` 후 Vite build를 실행한다. `dev`도 먼저 목록·사본을 생성해 같은 결과를 제공한다. 기본 E2E는 합성 입력만 쓰고 실제 자료 검사는 `verify:content`, 실계정 검사는 `access:verify` 명령으로만 활성화한다.
+- [x] **Step 4: `npm run fixtures:create`, `npm run build -- --sources .local/fixture-sources.json`, `npm run test:e2e -- tests/e2e/catalog.spec.ts`, `npm run typecheck`를 실행한다.** `tools/cli.ts`가 `--sources`를 소비하고 Vite에는 전달하지 않도록 연결한다. 스크린샷으로 두 폭의 앱 UI 잘림·목록 접기·제목 가독성을 확인한다.
+- [x] **Step 5: 해당 파일만 커밋한다.** `git add index.html src/main.ts src/app/catalog-view.ts src/app/styles.css vite.config.ts tests/e2e/catalog.spec.ts package.json playwright.config.ts`; `git commit -m "feat: add responsive course and material navigation"`.
 
 ## Task 6: iframe 읽기·문서 이동·주소 동기화 (AC-05, AC-07)
 
@@ -223,7 +223,7 @@ expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWi
 - Produces: `parseRoute(hash:string):Route`, `formatRoute(route:Route):string`, `Route={kind:'catalog';courseId?:string;groupId?:string;query?:string}|{kind:'read';documentId:string;anchor?:string}|{kind:'invalid'}` in `router.ts`.
 - `mountReader(root:HTMLElement,catalog:Catalog,onNavigate:(documentId:string,anchor?:string)=>void):{open:(id:string,anchor?:string)=>void;destroy:()=>void}` in `reader.ts`; bridge 메시지는 `{type:'study-hub:navigate';documentId:string;url:string}`. 수신 측은 실제 event.origin·event.source와 현재 iframe URL을 모두 검사한다.
 
-- [ ] **Step 1: `reader.spec.ts`에 실패 테스트를 쓴다.** 내부 상대·인코딩 링크→목록 제목/URL 동기화, 추가 HTML 이동, 문서 앵커·새로고침·직접 진입·뒤로/앞으로, PDF·외부 링크·새 탭·수정키 클릭, 알 수 없는 ID·누락 파일 오류 복귀를 검사한다. 빠른 A→B 전환 후 A iframe 메시지와 외부 source의 위조 메시지는 무시해야 한다.
+- [x] **Step 1: `reader.spec.ts`에 실패 테스트를 쓴다.** 내부 상대·인코딩 링크→목록 제목/URL 동기화, 추가 HTML 이동, 문서 앵커·새로고침·직접 진입·뒤로/앞으로, PDF·외부 링크·새 탭·수정키 클릭, 알 수 없는 ID·누락 파일 오류 복귀를 검사한다. 빠른 A→B 전환 후 A iframe 메시지와 외부 source의 위조 메시지는 무시해야 한다.
 
 ```ts
 // tests: follows_internal_links, restores_route, ignores_stale_frame, opens_external_documents
@@ -233,10 +233,13 @@ expect(await page.locator('iframe').getAttribute('src')).toContain(expectedEncod
 await expect(page.getByRole('link', {name:'목록으로'})).toBeVisible();
 ```
 
-- [ ] **Step 2: `npm run test:e2e -- tests/e2e/reader.spec.ts`를 실행한다.** router/reader/bridge 미구현 때문에 FAIL이어야 한다.
-- [ ] **Step 3: 세 인터페이스와 main 연결을 구현한다.** 라우트는 `/index.html#/catalog?course=<id>&group=<id>&q=<query>` 또는 `/index.html#/read/<documentId>?anchor=<encoded-anchor>`다. iframe은 same-origin 신뢰 자료로 실행하며 스크립트·폼·다운로드를 불필요한 sandbox로 막지 않는다. bridge는 일반 내부 HTML 클릭만 parent에 위임하고 기본 동작을 취소한다. standalone에서는 원본 링크가 작동한다. JS location 이동·hashchange·iframe load도 현재 URL을 통해 반영한다. 같은 선택을 되풀이해 history가 무한 증가하지 않게 하고 자료 교체 시 이전 iframe을 폐기해 stale 메시지를 차단한다. 앵커만 바뀌면 본문을 다시 로드하지 않는다. PDF·외부 링크·별도 열기는 `noopener`를 사용하고 원본 새 탭 의도를 보존한다. 로딩 실패·알 수 없는 경로는 오류와 목록 복귀를 제공한다.
-- [ ] **Step 4: reader·storage·catalog E2E와 `npm run typecheck`를 실행한다.** 세 브라우저에서 새로고침과 연속 뒤로가기가 중복 이동 없이 PASS여야 한다.
-- [ ] **Step 5: 해당 파일만 커밋한다.** `git add src/app/router.ts src/app/reader.ts src/compat/reader-bridge.ts tests/e2e/reader.spec.ts src/main.ts tools/content/transform.ts`; `git commit -m "feat: preserve document navigation and browser history"`.
+- [x] **Step 2: `npm run test:e2e -- tests/e2e/reader.spec.ts`를 실행한다.** router/reader/bridge 미구현 때문에 FAIL이어야 한다.
+- [x] **Step 3: 세 인터페이스와 main 연결을 구현한다.** 라우트는 `/index.html#/catalog?course=<id>&group=<id>&q=<query>` 또는 `/index.html#/read/<documentId>?anchor=<encoded-anchor>`다. iframe은 same-origin 신뢰 자료로 실행하며 스크립트·폼·다운로드를 불필요한 sandbox로 막지 않는다. bridge는 일반 내부 HTML 클릭만 parent에 위임하고 기본 동작을 취소한다. standalone에서는 원본 링크가 작동한다. JS location 이동·hashchange·iframe load도 현재 URL을 통해 반영한다. 같은 선택을 되풀이해 history가 무한 증가하지 않게 하고 자료 교체 시 이전 iframe을 폐기해 stale 메시지를 차단한다. 앵커만 바뀌면 본문을 다시 로드하지 않는다. PDF·외부 링크·별도 열기는 `noopener`를 사용하고 원본 새 탭 의도를 보존한다. 로딩 실패·알 수 없는 경로는 오류와 목록 복귀를 제공한다.
+- [x] **Step 4: reader·storage·catalog E2E와 `npm run typecheck`를 실행한다.** 세 브라우저에서 새로고침과 연속 뒤로가기가 중복 이동 없이 PASS여야 한다.
+- [x] **Step 5: 해당 파일만 커밋한다.** `git add src/app/router.ts src/app/reader.ts src/compat/reader-bridge.ts tests/e2e/reader.spec.ts src/main.ts tools/content/transform.ts`; `git commit -m "feat: preserve document navigation and browser history"`.
+
+
+**실행 보정 (2026-10-25):** 기존 read 라우트·호출은 유지하면서 optional search와 원본 state snapshot 전달을 추가했다. 현재 주요 브라우저의 Navigation API로 취소 가능한 문서 이동을 부모 앱 기록으로 통합하고, 실제 자료의 같은 경로 History API 호출은 사본 bridge에서 호환 처리한다. 연결된 iframe 문맥을 유지하되 문서 인스턴스·현재 URL·순번·부모 기록 항목·세대를 검사한다. 초기 설계의 물리적 iframe 폐기는 브라우저 자체 복원 기록을 잃어 수정했다. 자세한 지원 범위는 `docs/operations/browser-compatibility.md`에 기록했다.
 
 ## Task 7: 실제 자료 전체 로딩과 대표 기능 검증 (AC-04 및 AC-01~AC-11)
 
@@ -246,7 +249,7 @@ await expect(page.getByRole('link', {name:'목록으로'})).toBeVisible();
 - Consumes: Task 4 `BuildResult`, Task 6 route·reader; 출력된 `catalog.json`.
 - Produces: `verifyContent(options:{baseUrl:string;catalog:Catalog;reportDir:string}):Promise<{passed:boolean;documentsChecked:number;issues:Issue[]}>` in `verify-content.ts`. 각 문서의 요청 실패·pageerror·응답 상태·입력/사본 차이를 `.reports/verification.json`에 기록한다.
 
-- [ ] **Step 1: 전체 로딩 검사기의 실패 fixture를 쓴다.** 합성 HTML의 누락 이미지·CSS 하위 누락·JS 동적 fetch 누락·실행 예외를 하나씩 주입하고 문서별 error가 보고되는지 검증한다. CDN 장애는 외부로, 원본에서도 깨진 로컬 링크는 원본 결함으로, 변환 후에만 깨지는 링크는 수집/호환 오류로 분류하되 명시 예외 없는 오류는 모두 실패로 처리한다.
+- [x] **Step 1: 전체 로딩 검사기의 실패 fixture를 쓴다.** 합성 HTML의 누락 이미지·CSS 하위 누락·JS 동적 fetch 누락·실행 예외를 하나씩 주입하고 문서별 error가 보고되는지 검증한다. CDN 장애는 외부로, 원본에서도 깨진 로컬 링크는 원본 결함으로, 변환 후에만 깨지는 링크는 수집/호환 오류로 분류하되 명시 예외 없는 오류는 모두 실패로 처리한다.
 
 ```ts
 // tests: reports_every_document, catches_runtime_fetch, distinguishes_source_and_copy
@@ -255,10 +258,13 @@ expect(result.documentsChecked).toBe(catalog.documents.length);
 expect(result.issues.some(i => i.target.endsWith('dynamic.json'))).toBe(true);
 ```
 
-- [ ] **Step 2: `npm run test:e2e -- tests/e2e/content.spec.ts`를 실행한다.** 검사기 미구현 때문에 FAIL이어야 한다.
-- [ ] **Step 3: 로딩 검사기와 대표 행동 시나리오를 구현한다.** listed HTML 전체와 수집된 추가 HTML을 독립된 페이지로 순회하고 상대 리소스·동적 요청·script 오류를 기록한다. iframe 경로도 대표 문서에서 검사한다. 생명과학 `복습노트/0901/복습문제_0901_Biomolecules_and_Cells.html`, 자료구조 `복습노트/1012/정리노트_1012_Queue.html`, 기계학습 `복습노트/1012/정리노트_1012_Several_Mathematical_Proofs.html`·`복습노트/1014/인터렉티브_01_사전분포와_사후분포.html`, 논회실 `복습노트/실험01/실험01_문제설명.html`·`실험01_기출문제.html`, 전자회로2 `복습노트/0909/문제설명_0909_Cascode_Stage.html`을 사용한다. 제목·수식 렌더·이미지 naturalWidth·문제 버튼·해설·시뮬레이션·sessionStorage 시도 기록·같은 날짜 충돌을 사용자 조작으로 검증한다. 논회실의 inline JSON→img.src 이미지도 열어 extraFiles에 실제 참조 경로를 명시하고, 실행되지 않는 선택적 sample.json fallback은 무조건 누락으로 세지 않는다. 각 문서의 실제 selector를 확인해 테스트에 고정하고 네트워크/로드 완료를 기다린다. screenshot만으로 기능 통과를 주장하지 않는다.
-- [ ] **Step 4: `npm run typecheck`, `npm test`, `npm run test:e2e`, `npm run verify:content -- --sources .local/sources.json`을 실행한다.** Chromium에서 모든 HTML, 세 브라우저·390/1440px에서 대표 기능을 검증한다. 실제 디렉터리 이름이 바뀌었으면 Task 1 입력 보고서를 근거로 fixture 선택을 갱신한다. 동적 파일 누락은 extraFiles에, 저장 스키마 누락은 storage-rules에 반영한 뒤 영향받은 검증을 재실행한다. 설명 없는 오류 0·원본 해시 불변이 통과 기준이다.
-- [ ] **Step 5: 합성 테스트·코드·규칙·검증 절차만 커밋한다.** `git add tools/verify-content.ts tests/e2e/content.spec.ts tests/e2e/representatives.spec.ts docs/operations/content-verification.md package.json config`; `git commit -m "test: verify full content loading and representative study flows"`. 실제 자료·보고서·로그인 상태는 포함하지 않는다.
+- [x] **Step 2: `npm run test:e2e -- tests/e2e/content.spec.ts`를 실행한다.** 검사기 미구현 때문에 FAIL이어야 한다.
+- [x] **Step 3: 로딩 검사기와 대표 행동 시나리오를 구현한다.** listed HTML 전체와 수집된 추가 HTML을 독립된 페이지로 순회하고 상대 리소스·동적 요청·script 오류를 기록한다. iframe 경로도 대표 문서에서 검사한다. 생명과학 `복습노트/0901/복습문제_0901_Biomolecules_and_Cells.html`, 자료구조 `복습노트/1012/정리노트_1012_Queue.html`, 기계학습 `복습노트/1012/정리노트_1012_Several_Mathematical_Proofs.html`·`복습노트/1014/인터렉티브_01_사전분포와_사후분포.html`, 논회실 `복습노트/실험01/실험01_문제설명.html`·`실험01_기출문제.html`, 전자회로2 `복습노트/0909/문제설명_0909_Cascode_Stage.html`을 사용한다. 제목·수식 렌더·이미지 naturalWidth·문제 버튼·해설·시뮬레이션·sessionStorage 시도 기록·같은 날짜 충돌을 사용자 조작으로 검증한다. 논회실의 inline JSON→img.src 이미지도 열어 extraFiles에 실제 참조 경로를 명시하고, 실행되지 않는 선택적 sample.json fallback은 무조건 누락으로 세지 않는다. 각 문서의 실제 selector를 확인해 테스트에 고정하고 네트워크/로드 완료를 기다린다. screenshot만으로 기능 통과를 주장하지 않는다.
+- [x] **Step 4: `npm run typecheck`, `npm test`, `npm run test:e2e`, `npm run verify:content -- --sources .local/sources.json`을 실행한다.** Chromium에서 모든 HTML, 세 브라우저·390/1440px에서 대표 기능을 검증한다. 실제 디렉터리 이름이 바뀌었으면 Task 1 입력 보고서를 근거로 fixture 선택을 갱신한다. 동적 파일 누락은 extraFiles에, 저장 스키마 누락은 storage-rules에 반영한 뒤 영향받은 검증을 재실행한다. 설명 없는 오류 0·원본 해시 불변이 통과 기준이다.
+- [x] **Step 5: 합성 테스트·코드·규칙·검증 절차만 커밋한다.** `git add tools/verify-content.ts tests/e2e/content.spec.ts tests/e2e/representatives.spec.ts docs/operations/content-verification.md package.json config`; `git commit -m "test: verify full content loading and representative study flows"`. 실제 자료·보고서·로그인 상태는 포함하지 않는다.
+
+
+**실행 결과 (2026-10-25):** 220개 전체 HTML과 42개 대표 조합을 검증했다. 동적 그림 66개 경로를 명시했고 누락 PNG 42개를 추가 수집했다. 원본 Google Fonts Pretendard HTTP 400은 정확한 문서·URL·실패 종류와 폴백 가독성 증거를 갖춘 실행 시 예외 1건으로 남겼다. 검증 기록은 설정 읽기 전 안전하게 무효화하며 최종 앱 전체 해시·원본 해시·추적 상태와 결합한다.
 
 ## Task 8: Workers 정적 제공과 빈 배포물 로컬 검증 (AC-03, AC-07, AC-11)
 
@@ -269,7 +275,7 @@ expect(result.issues.some(i => i.target.endsWith('dynamic.json'))).toBe(true);
 - Produces: `buildBootstrap(outputDir:string):Promise<{directory:string;sentinelPaths:string[];bundleHash:string}>` in `bootstrap.ts`. 학습 자료 없는 앱과 합성 HTML·PNG·PDF·목록 sentinel만 생성한다.
 - `wrangler.jsonc`: `name:'ajou-study-hub'`, `compatibility_date:'2026-10-24'`, `assets.directory:'./dist'`, `assets.html_handling:'none'`, `assets.not_found_handling:'404-page'`. Worker script·run_worker_first는 추가하지 않는다.
 
-- [ ] **Step 1: hosting 실패 테스트를 쓴다.** 실제 Wrangler 로컬 서버에서 `/` 진입, `.html` 정확한 URL, 한글·공백 파일, `.pack`·`.assets`, font·PDF content-type, 누락 PDF/HTML의 404와 본문 비노출을 검사한다. bootstrap에 실제 source 파일이 하나라도 섞이면 실패해야 한다.
+- [x] **Step 1: hosting 실패 테스트를 쓴다.** 실제 Wrangler 로컬 서버에서 `/` 진입, `.html` 정확한 URL, 한글·공백 파일, `.pack`·`.assets`, font·PDF content-type, 누락 PDF/HTML의 404와 본문 비노출을 검사한다. bootstrap에 실제 source 파일이 하나라도 섞이면 실패해야 한다.
 
 ```ts
 // tests: serves_exact_html_and_hidden_paths, missing_is_404, bootstrap_has_no_sources
@@ -278,10 +284,13 @@ expect((await request.get('/missing.pdf')).status()).toBe(404);
 expect(bootstrapSourcePaths).toEqual([]);
 ```
 
-- [ ] **Step 2: `npm test -- tests/deploy/hosting.test.ts`와 `npm run test:e2e -- tests/e2e/hosting.spec.ts`를 실행한다.** hosting 설정 미구현 때문에 FAIL이어야 한다.
-- [ ] **Step 3: 정적 설정·bootstrap·CLI 연결을 구현한다.** `/ /index.html 302`를 `_redirects`에 넣고 404.html에는 “자료를 찾을 수 없습니다”와 `/index.html#/catalog`의 “목록으로” 링크를 둔다. `.html` 자동 제거와 SPA fallback은 끈다. 기존 iframe의 스크립트/CDN/임베딩을 막는 전역 CSP·X-Frame-Options를 임의로 추가하지 않는다. `_headers`에 `Cache-Control: private, no-store`를 적용하고 동작을 검사한다. 숨김 부속 파일은 Wrangler emulator에서 실제 제공 여부를 확인한다. `hosting:dev`는 로컬 서버만 연다. README에 원본 설정·수동 갱신·보고서·최종 dist 검사 명령을 기록한다.
-- [ ] **Step 4: 위 테스트, `npm run build -- --sources .local/sources.json`, `npm run hosting:dev` 기반 smoke 검사를 실행한다.** 전체 dist에 한도 검사를 다시 실행한다. 여기서는 배포·Access 설정·계정 로그인 없이 로컬 정적 제공만 검증한다.
-- [ ] **Step 5: 해당 파일만 커밋한다.** `git add wrangler.jsonc config/hosting tools/deploy/bootstrap.ts tests/deploy/hosting.test.ts tests/e2e/hosting.spec.ts README.md package.json tools/cli.ts playwright.config.ts`; `git commit -m "feat: configure exact static asset serving and empty deployment bundle"`.
+- [x] **Step 2: `npm test -- tests/deploy/hosting.test.ts`와 `npm run test:e2e -- tests/e2e/hosting.spec.ts`를 실행한다.** hosting 설정 미구현 때문에 FAIL이어야 한다.
+- [x] **Step 3: 정적 설정·bootstrap·CLI 연결을 구현한다.** `/ /index.html 302`를 `_redirects`에 넣고 404.html에는 “자료를 찾을 수 없습니다”와 `/index.html#/catalog`의 “목록으로” 링크를 둔다. `.html` 자동 제거와 SPA fallback은 끈다. 기존 iframe의 스크립트/CDN/임베딩을 막는 전역 CSP·X-Frame-Options를 임의로 추가하지 않는다. `_headers`에 `Cache-Control: private, no-store`를 적용하고 동작을 검사한다. 숨김 부속 파일은 Wrangler emulator에서 실제 제공 여부를 확인한다. `hosting:dev`는 로컬 서버만 연다. README에 원본 설정·수동 갱신·보고서·최종 dist 검사 명령을 기록한다.
+- [x] **Step 4: 위 테스트, `npm run build -- --sources .local/sources.json`, `npm run hosting:dev` 기반 smoke 검사를 실행한다.** 전체 dist에 한도 검사를 다시 실행한다. 여기서는 배포·Access 설정·계정 로그인 없이 로컬 정적 제공만 검증한다.
+- [x] **Step 5: 해당 파일만 커밋한다.** `git add wrangler.jsonc config/hosting tools/deploy/bootstrap.ts tests/deploy/hosting.test.ts tests/e2e/hosting.spec.ts README.md package.json tools/cli.ts playwright.config.ts`; `git commit -m "feat: configure exact static asset serving and empty deployment bundle"`.
+
+
+**실행 결과 (2026-10-25):** 로컬 Wrangler에서 실제 자료 경로·MIME·캐시·404를 17개 항목으로 확인했다. 빈 배포물은 자료 없는 12개 파일로 별도 생성한다. 정적 제공 설정을 포함한 최종 4,803개 파일의 새 해시로 220개 전체·42개 대표 조합을 재검증했다. 계정 설정·업로드는 실행하지 않았다.
 
 ## Task 9: 실제 Access 설정과 자료 업로드 차단 장치 (AC-12 전제)
 
@@ -294,7 +303,7 @@ expect(bootstrapSourcePaths).toEqual([]);
 - `AccessSnapshot={accountId:string;workerName:string;accessAppId:string;allowedEmails:string[];workerWide:boolean;hasBypass:boolean;hosts:string[];freePlan:boolean;fingerprint:string}`는 실제 앱·정책·Workers route 설정을 정규화한 값이다.
 - `ProtectionEvidence={accountId:string;workerName:string;accessAppId:string;checkedAt:string;settingsFingerprint:string;policyFingerprint:string;hosts:string[];anonymousBlocked:boolean;otherAccountBlocked:boolean;ownerAllowed:boolean;sentinelHashes:Record<string,string>}`. 로컬 `.reports/access-evidence.json`에만 기록한다.
 
-- [ ] **Step 1: `access.test.ts`에 실패 테스트를 쓴다.** 이메일 없음·도메인 허용·everyone·bypass·허용 이메일 추가·production만 보호·구체적인 path override·유료 플랜·읽기 API 오류·다른 계정 미검증·바뀐 host/policy·만료 증거는 전부 거절한다. 실제 Access API shape는 구현 당일 공식 GET 응답으로 adapter를 맞추고 fixture는 비식별화한다.
+- [x] **Step 1: `access.test.ts`에 실패 테스트를 쓴다.** 이메일 없음·도메인 허용·everyone·bypass·허용 이메일 추가·production만 보호·구체적인 path override·유료 플랜·읽기 API 오류·다른 계정 미검증·바뀐 host/policy·만료 증거는 전부 거절한다. 실제 Access API shape는 구현 당일 공식 GET 응답으로 adapter를 맞추고 fixture는 비식별화한다.
 
 ```ts
 // tests: rejects_broad_policy, requires_all_hosts, rejects_stale_evidence, fails_closed_on_api_error
@@ -304,10 +313,13 @@ expect(() => assertReleaseAllowed(changedPolicyInput)).toThrow();
 expect(() => assertReleaseAllowed(validSingleOwnerInput)).not.toThrow();
 ```
 
-- [ ] **Step 2: `npm test -- tests/deploy/access.test.ts`를 실행한다.** guard/access 미구현 때문에 FAIL이어야 한다.
-- [ ] **Step 3: Access adapter·guard·검증 코드를 구현한다.** 이 Worker의 모든 트래픽에만 Access를 적용하는 절차를 문서화하며 계정의 다른 Worker 설정은 바꾸지 않는다. worker destination의 전체 트래픽 보호, exact 이메일 1개 Allow와 OTP, 더 구체적인 hostname/path 정책까지 검사한다. 불명확한 정책은 거절한다. 증거 유효 기간은 24시간이고 host·정책·설정 변경 즉시 무효다. status만 검사하지 말고 비로그인·다른 계정 응답에서 sentinel body/hash가 없고 본인 응답에서 일치하는지 검증한다. 무인 검증 불가한 다른 계정 OTP는 사용자 직접 로그인으로 완료하며 토큰·코드·쿠키를 출력하거나 커밋하지 않는다.
+- [x] **Step 2: `npm test -- tests/deploy/access.test.ts`를 실행한다.** guard/access 미구현 때문에 FAIL이어야 한다.
+- [x] **Step 3: Access adapter·guard·검증 코드를 구현한다.** 이 Worker의 모든 트래픽에만 Access를 적용하는 절차를 문서화하며 계정의 다른 Worker 설정은 바꾸지 않는다. worker destination의 전체 트래픽 보호, exact 이메일 1개 Allow와 OTP, 더 구체적인 hostname/path 정책까지 검사한다. 불명확한 정책은 거절한다. 증거 유효 기간은 24시간이고 host·정책·설정 변경 즉시 무효다. status만 검사하지 말고 비로그인·다른 계정 응답에서 sentinel body/hash가 없고 본인 응답에서 일치하는지 검증한다. 무인 검증 불가한 다른 계정 OTP는 사용자 직접 로그인으로 완료하며 토큰·코드·쿠키를 출력하거나 커밋하지 않는다.
 - [ ] **Step 4: 단위 테스트 PASS 후 실제 계정의 준비 조건을 확인하고 빈 bootstrap만 배포한다.** `deploy:bootstrap`은 `buildBootstrap` 결과 외 업로드를 거절한다. 무료 플랜, 대상 계정·Worker 이름, 실제 허용 이메일을 확인한다. Access를 설정한 뒤 `npm run access:verify`로 운영·활성 미리보기 주소의 목록/HTML/이미지/PDF sentinel 전부에 대해 비로그인·다른 계정 차단과 본인 허용을 검증한다. 미사용 preview는 비활성화하고 설정을 읽어 확인한다. 신규 preview를 활성화하면 다시 검증한다. 계정/이메일/로그인 수단 부족이면 이 단계는 미완료로 남기고 실제 자료를 올리지 않는다.
-- [ ] **Step 5: 코드·비식별 테스트·운영 문서만 커밋한다.** `git add tools/deploy/access.ts tools/deploy/guard.ts tests/deploy/access.test.ts tests/e2e/access.spec.ts docs/operations/deployment.md tools/cli.ts package.json`; `git commit -m "feat: gate private content uploads on verified access protection"`.
+- [x] **Step 5: 코드·비식별 테스트·운영 문서만 커밋한다.** `git add tools/deploy/access.ts tools/deploy/guard.ts tests/deploy/access.test.ts tests/e2e/access.spec.ts docs/operations/deployment.md tools/cli.ts package.json`; `git commit -m "feat: gate private content uploads on verified access protection"`.
+
+
+**실행 상태 (2026-10-25):** 로컬 정책·신원·증거 검사와 빈 배포물 전용 업로드 경로를 구현·합성 검증했다. 실제 계정·허용 이메일·관리 자격 증명·같은 팀의 독립된 다른 신원 증명은 아직 없다. Step 4와 AC-12/13은 미검증이며 실제 자료는 업로드하지 않았다. 현재 live adapter는 확인된 preview 비활성·기본 workers.dev 경로만 허용하고 알려지지 않은 API/플랜 형식은 거절한다.
 
 ## Task 10: 수동 비공개 배포와 최종 인수 (AC-12, AC-13)
 
@@ -317,7 +329,7 @@ expect(() => assertReleaseAllowed(validSingleOwnerInput)).not.toThrow();
 - Consumes: Task 4 BuildResult·보고서, Task 7 로컬 검증 결과, Task 8 최종 dist, Task 9 live snapshot·보호 증거.
 - Produces: `releasePrivate(options:{settings:DeploymentSettings;distDir:string;reportPath:string},deps?:ReleaseDependencies):Promise<{url:string;versionId:string;bundleHash:string}>` in `release.ts`; `ReleaseDependencies={readAccessSnapshot:typeof readAccessSnapshot;upload:(directory:string)=>Promise<{url:string;versionId:string}>}`. 기본 deps는 실제 Cloudflare 조회와 로컬 Wrangler 실행을 사용한다. 유일한 실제 자료 업로드 진입점은 `npm run deploy:private`다.
 
-- [ ] **Step 1: `release.test.ts`에 실패 테스트를 쓴다.** uploader는 주입 가능한 테스트 adapter로 두고 보호 증거 미확인·동적 참조 오류·한도 초과·dist 변조·검증 후 policy/host 변경 시 한 번도 호출되지 않아야 한다. 정상 배포에서 전달 파일 집합은 검사한 dist와 같아야 한다.
+- [x] **Step 1: `release.test.ts`에 실패 테스트를 쓴다.** uploader는 주입 가능한 테스트 adapter로 두고 보호 증거 미확인·동적 참조 오류·한도 초과·dist 변조·검증 후 policy/host 변경 시 한 번도 호출되지 않아야 한다. 정상 배포에서 전달 파일 집합은 검사한 dist와 같아야 한다.
 
 ```ts
 // tests: never_uploads_before_all_gates, rechecks_live_policy, uploads_verified_bundle_only
@@ -326,10 +338,13 @@ expect(upload).not.toHaveBeenCalled();
 expect(uploadedBundleHash).toBe(verifiedBundleHash);
 ```
 
-- [ ] **Step 2: `npm test -- tests/deploy/release.test.ts`를 실행한다.** release 미구현 때문에 FAIL이어야 한다.
-- [ ] **Step 3: release 함수를 구현한다.** 실제 업로드 직전에 설정·무료 플랜·Access 정책·현재 host를 다시 조회하고 Task 9 guard를 실행한다. 실제 파일 집합과 로컬 검증 결과의 bundleHash를 대조하고 최종 dist 한도·금지 파일·미해결 issue를 검사한다. Wrangler는 검사한 그 디렉터리만 업로드하며 재빌드하지 않는다. 배포 URL·버전·해시·시각을 로컬 보고서에 남기고 무료 사용량 확인 위치·갱신 명령·실패 시 원인을 운영 문서에 기록한다. 로그인 자료를 공개 preview에 복제하지 않는다.
+- [x] **Step 2: `npm test -- tests/deploy/release.test.ts`를 실행한다.** release 미구현 때문에 FAIL이어야 한다.
+- [x] **Step 3: release 함수를 구현한다.** 실제 업로드 직전에 설정·무료 플랜·Access 정책·현재 host를 다시 조회하고 Task 9 guard를 실행한다. 실제 파일 집합과 로컬 검증 결과의 bundleHash를 대조하고 최종 dist 한도·금지 파일·미해결 issue를 검사한다. Wrangler는 검사한 그 디렉터리만 업로드하며 재빌드하지 않는다. 배포 URL·버전·해시·시각을 로컬 보고서에 남기고 무료 사용량 확인 위치·갱신 명령·실패 시 원인을 운영 문서에 기록한다. 로그인 자료를 공개 preview에 복제하지 않는다.
 - [ ] **Step 4: 단위 테스트 PASS와 모든 게이트 확인 후 실제 자료를 배포한다.** 운영·활성 preview에서 비로그인/다른 계정으로 실제 HTML·이미지·PDF·catalog 본문을 못 받는지 재검증한다. 본인은 모바일·PC에서 인증 후 대표 자료·문제풀이·내부 링크를 연다. 인가 실패 시 배포 성공으로 보고하지 않고 Access 전체 차단 또는 자료 없는 검증 배포물로 회수한다. rollback도 현재 Access 보호가 유지되는 버전만 선택한다. 다른 주소가 생기면 Task 9 검증을 다시 거친다.
-- [ ] **Step 5: `npm run typecheck`, `npm test`, `npm run test:e2e`의 필요한 변경 범위 검증과 실계정 인수 결과를 정리하고 커밋한다.** `git add tools/deploy/release.ts tests/deploy/release.test.ts README.md docs/operations/deployment.md tools/cli.ts package.json`; `git commit -m "feat: release verified study content behind cloudflare access"`. 보고서에는 로컬 완료/클라우드 완료, 각 AC의 실제 증거, 예외 목록, 남은 운영 조치를 구분한다.
+- [x] **Step 5: 로컬 `npm run typecheck`, `npm test`, 필요한 `npm run test:e2e` 범위를 검증하고 코드·문서를 커밋한다.** 실계정 인수 결과는 Step 4 이후에 기록한다. `git add tools/deploy/release.ts tests/deploy/release.test.ts README.md docs/operations/deployment.md tools/cli.ts package.json`; `git commit -m "feat: release verified study content behind cloudflare access"`. 보고서에는 로컬 완료/클라우드 완료, 각 AC의 실제 증거, 예외 목록, 남은 운영 조치를 구분한다.
+
+
+**실행 상태 (2026-10-25):** 로컬 업로드 차단·사본 staging·고정 config·불확실한 업로드 영수증 처리를 구현하고 작업별 리뷰를 통과했다. 원본 설정·선택·Git 추적·해시를 다시 확인하며 `.env*`와 staging 중 만료를 업로더 직전에 거절한다. 실제 v2 자료 검증은 220개·42조합을 통과했다. 실제 업로드·게시 후 인수·회수는 미실행이며 Step 4는 미완료다.
 
 ## 완료 기준 추적과 자체 검토
 
