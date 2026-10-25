@@ -37,3 +37,9 @@ npm run test:e2e -- tests/e2e/hosting.spec.ts
 `bootstrap:build`는 **로컬 빌드만** 합니다. 기존 dist나 자료를 복사하지 않고 publicDir를 끈 깨끗한 앱 컴파일에 빈 catalog와 합성 HTML·PNG·PDF·폰트 MIME 검사 파일을 더합니다. 합성 폰트는 MIME 검사용 바이트이며 실제 글꼴로 로드하지 않습니다. `.generated/bootstrap/`만 교체하고 `.reports/bootstrap-build.json`에 빈 sources/inputs, 최종 출력 목록과 정확한 해시를 남깁니다. HTML과 부속 파일은 `content/test/` 아래의 합성 sentinel뿐입니다. 실제 원본·로컬 설정·인증 정보는 들어가지 않습니다. 테스트 출력은 별도 `.generated/bootstrap-tests/` 아래에 격리합니다.
 
 Wrangler Free 정적 한도는 버전당 20,000개 파일, 파일당 25 MiB이며 최종 manifest 전체를 대상으로 검사합니다. 총 크기에 대한 업로드 성공을 이 로컬 검사로 보장하지 않습니다. `deploy:bootstrap`은 이제 계정·무료 플랜·대상 주소 확인 후 새로 만든 빈 bootstrap만 실제 업로드하는 명령입니다. `access:verify`는 실제 API와 서로 다른 브라우저 인증 상태를 검사합니다. 계정 로그인·Access 설정·실제 배포는 아직 수행하지 않았으며, 합성 테스트는 실제 보호 증거가 아닙니다. 실행 전 [배포 운영 안내](docs/operations/deployment.md)를 확인하세요. 실제 자료 업로드는 현재의 Access 증거와 실제 자료 검증을 모두 요구합니다.
+
+## 보호된 실제 자료 릴리스
+
+사용자 승인과 실제 계정 보호 검증 후 `npm run deploy:private`를 수동 실행합니다. 명령은 재빌드하지 않으며 인자를 받지 않습니다. `.reports/app-build.json` 최종 앱 manifest, 24시간 이내의 `.reports/verification.json`, `.reports/access-evidence.json` 및 현재 설정·무료 플랜·Access 정책이 모두 일치해야 업로드합니다. 전체 문서 검사와 Chromium/Firefox/WebKit × 390/1440px의 42개 대표 시나리오, 동적 workbook 그림, 정확한 예외를 확인합니다. 실제 220개 HTML 수는 현재 catalog에서 계산하므로 향후 입력 증가도 전부 검사해야 합니다.
+
+검사한 바이트를 별도 소유 디렉터리에 복사한 뒤 그 사본과 전용 Wrangler 설정만 사용합니다. 원본 dist를 동시에 다시 빌드해도 업로드 사본은 바뀌지 않습니다. 결과는 `.reports/private-release.json`에 기록하며 업로드 영수증은 실제 AC-12/13 인수 증거와 구분합니다. 현재 실제 업로드와 인수는 미실행입니다. 상세한 게이트·실패 처리·인수 절차는 [배포 운영 안내](docs/operations/deployment.md)를 따르세요.

@@ -18,7 +18,7 @@
     "bootstrap:build": "tsx tools/deploy/bootstrap.ts build",
     "deploy:bootstrap": "tsx tools/deploy/bootstrap.ts upload",
     "access:verify": "tsx tools/deploy/access.ts",
-    "deploy:private": "tsx tools/deploy/release.ts"
+    "deploy:private": "tsx tools/cli.ts deploy:private"
   },
   "dependencies": {
     "parse5": "8.0.1",

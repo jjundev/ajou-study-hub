@@ -11,6 +11,12 @@ import { parseAppArguments, validateAppOutput } from './app-build-safety.js';
 import { applyHosting } from './deploy/bootstrap.js';
 async function main() {
   const [command, ...args] = process.argv.slice(2);
+  if (command === 'deploy:private') {
+    if (args.length) throw Error('Private release accepts no overrides');
+    const { runPrivateRelease } = await import('./deploy/release.js');
+    await runPrivateRelease();
+    return;
+  }
   if (!["content:build", "build", "dev"].includes(command ?? "")) throw new Error("Expected content:build, build, or dev");
   const { sources, explicitSources, viteArgs } = parseAppArguments(command!, args);
   const appRoot = fileURLToPath(new URL('../', import.meta.url));

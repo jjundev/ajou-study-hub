@@ -57,3 +57,32 @@ Zero Trust 앱에서 Allow 정책을 하나만 두고 Include를 본인 이메�
 실제 계정·Free 플랜 응답·Access 앱/정책·페이지네이션·다른 계정 identity 증명·게시 후 sentinel 응답은 모두 실제 준비 이후 재확인이 필요합니다. 실제 AC-12/AC-13 통과를 로컬 테스트로 주장하지 않습니다.
 
 공식 추가 근거: [사용자 identity 조회](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/application-token/#user-identity), [OTP 차단 사용자 동작](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/#log-in-with-otp), [조직 auth_domain 조회](https://developers.cloudflare.com/api/resources/zero_trust/subresources/organizations/methods/list/). 2026-10-25 재확인했습니다.
+
+## 실제 자료의 수동 릴리스 게이트
+
+승인 후 실제 자료를 갱신하는 순서는 다음과 같습니다. 원본은 수정하지 않습니다.
+
+```powershell
+npm run build -- --sources .local/sources.json
+npm run verify:content -- --sources .local/sources.json
+npm run access:verify
+npm run deploy:private
+```
+
+마지막 명령은 재빌드하거나 추가 인자를 받지 않습니다. `releasePrivate`의 `reportPath`는 `.reports/app-build.json` 최종 앱 manifest입니다. `.reports/content-build.json`이나 임의 보고서를 지정할 수 없습니다. runtime proof는 `.reports/verification.json`, 보호 proof는 `.reports/access-evidence.json` 하나씩만 읽습니다. 모두 로컬 파일이며 게시하지 않습니다. 생성 시각이 24시간을 넘거나 최종 manifest보다 오래된 runtime proof, 바뀐 입력 hash/provenance·catalog hash·출력 hash·크기·파일 집합, 미완료 문서/요청, 부족한 대표 시나리오, 정적/동적 error와 알려지지 않은 warning은 업로드 전에 중단합니다. 알려진 warning도 현재 `config/content-exceptions.json`의 정확한 외부 요청·종류·이유와 원본/사본 fallback 가독성 증거가 필요합니다. 실제 검증의 220개 HTML과 42개 대표 시나리오를 성공 플래그 하나로 대체하지 않습니다. 문서 수는 고정 상수가 아니라 catalog 전체입니다.
+
+검증기는 symlink와 금지 파일(`.git`, `.env*`, credentials, secret JSON/PEM, 제작/backup, `.local`, `.reports`, `_worker.js`, `.assetsignore`)을 거절하고 Free 한도를 최종 파일 전체에 적용합니다. 업로더는 `.generated/private-release-<UUID>/assets/`에 파일을 복사해 manifest와 다시 대조합니다. hardlink를 사용하지 않으며 동시 dist 재빌드와 분리됩니다. 임시 사본은 실행 후 제거합니다. 이 공간은 현재 약 1.1GB인 dist 외에 같은 크기의 여유 디스크가 더 필요합니다.
+
+프로젝트 `wrangler.jsonc`는 현재 검토한 name/compatibility_date/assets 세 필드만 허용합니다. 설정 확장이 필요하면 먼저 코드와 검증을 함께 검토하세요. 업로드 시 계정 ID, 전용 Worker, 정적 assets, `html_handling:none`, `not_found_handling:404-page`, `workers_dev:true`, `preview_urls:false`로 고정한 별도 설정을 만듭니다. main, run_worker_first, routes, 새 호스트, env, build hook과 CLI override는 허용하지 않습니다. 마지막 live snapshot은 사본 생성 후 다시 읽고, 설정/정책/주소와 proof/config/dist를 재확인한 직후 업로드합니다. API token은 환경변수, 정상 Wrangler 인증은 로컬 세션만 사용하며 토큰·OTP·응답 본문·업로드 로그를 출력하거나 URL 상태에 넣지 않습니다.
+
+실제 설치된 Wrangler 4.152.0의 `deploy --help`와 구현의 `Current Version ID:` 및 trigger URL 출력을 확인해 `deploy --config <전용설정> --strict --autoconfig=false`를 사용합니다. 해당 버전의 변경 후에는 이 계약을 재확인해야 합니다. 영수증은 정확한 운영 URL 하나와 UUID 버전 ID 하나가 있어야 인정합니다. CLI 종료 성공만으로 보호·접근 성공을 주장하지 않습니다. 실제 Cloudflare GET 응답 및 실제 upload 호환성은 아직 미검증이며 알 수 없는 응답은 중단합니다.
+
+`.reports/private-release.json`은 배포 영수증 전용입니다. `prepared-not-uploaded`는 업로드 전, `upload-started-outcome-unknown`은 업로드가 시작되어 결과를 확인해야 하는 상태, `uploaded-acceptance-pending`은 URL/버전 영수증만 확인한 상태입니다. 모든 상태에서 `acceptanceComplete:false`입니다. 중간 오류·네트워크 단절·영수증 해석 오류는 실제 게시가 없었다는 뜻이 아닙니다. 중복 재시도 전에 Dashboard에서 전용 Worker의 현재 버전·주소·보호를 확인하세요. 실제 인수 기록은 영수증과 별도 로컬 기록에 남깁니다.
+
+## 게시 후 실제 인수와 회수 (아직 미실행)
+
+빈 bootstrap sentinel을 검증한 `access:verify`는 실제 자료 인수 검사를 대신하지 않습니다. 게시 후 같은 계정·정책·전체 주소를 다시 조회하고 운영 및 활성 preview 각각에서 **실제 catalog, HTML, 중첩 HTML, 이미지, PDF**의 본문이 비로그인 및 독립 인증된 다른 계정에 노출되지 않는지 직접 확인합니다. 비로그인은 확인한 Access 로그인/차단 응답, 다른 계정은 확인한 팀 identity와 최종 대상 거부가 필요합니다. 다른 계정의 로그인 페이지 또는 단순 5xx를 보호 성공으로 계산하지 않습니다. 본인은 정상 OTP 후 모바일과 PC에서 대표 자료·문제 선택/풀이·이미지·내부 링크·뒤로가기를 엽니다. 새 preview/주소가 있으면 먼저 완전한 주소 지원과 Task9 보호 검증을 다시 수행합니다. 현재 경로는 preview 비활성만 지원하므로 새 주소가 생기면 중단합니다.
+
+이 단계는 아직 자동화된 실제 자료 검증 명령을 제공하지 않으며 사용자 실계정·독립 witness·모바일/PC 인수가 필요합니다. AC-12/13은 실제 기록이 생길 때까지 미완료입니다. 정책 조회가 바뀌거나 본문 노출/인가 실패가 있으면 성공으로 보고하지 않고 사용자 승인하에 해당 앱을 전체 차단하거나 자료 없는 검증 배포물로 회수합니다. `deploy:bootstrap`은 빈 앱 재게시 경로지만 회수 완료 자체도 보호와 본문 부재를 다시 확인해야 합니다. rollback은 현재 보호가 확인된 버전만 수동 선택하고 새 버전 URL/호스트도 다시 확인합니다. 보호 해제·이메일 추가·임시 bypass로 복구하지 않습니다.
+
+무료 사용량은 Cloudflare Dashboard의 해당 계정 Workers & Pages → 전용 Worker → Metrics 및 계정 Billing/Subscriptions와 Zero Trust 계정 플랜에서 확인합니다. 경로명이 달라지거나 Free 여부가 읽기 API로 확인되지 않으면 무료라고 추정하지 않습니다. 파일 수/단일 파일 한도 통과는 총 전송 성공·무료 API 호환성·원격 접근 인수를 보장하지 않습니다.
