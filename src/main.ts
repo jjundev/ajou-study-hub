@@ -34,7 +34,9 @@ async function load() {
     const host = document.createElement('div');
     const back = document.createElement('a'); back.href = '#/catalog'; back.textContent = '목록으로';
     back.addEventListener('click', event => { event.preventDefault(); navigate({kind:'catalog'}); });
-    const holder = document.createElement('div'); host.append(back, holder); panel.append(host);
+    const standalone = document.createElement('a'); standalone.textContent = '새 탭에서 열기'; standalone.target = '_blank'; standalone.rel = 'noopener';
+    const actions = document.createElement('div'); actions.className = 'reader-actions'; actions.append(back, standalone);
+    const holder = document.createElement('div'); host.append(actions, holder); panel.append(host);
     const reader = mountReader(holder, catalog, (documentId, anchor, search, mode, change) =>
       navigate({kind:'read',documentId,anchor,search}, mode, change));
     const entryId = () => history.state?.studyHub?.entryId ?? crypto.randomUUID();
@@ -61,13 +63,22 @@ async function load() {
     }
     function display(route: Route) {
       host.hidden = route.kind === 'catalog';
+      standalone.hidden = true; standalone.removeAttribute('href');
       if (route.kind === 'catalog') {
         view.setBrowseState(route); view.setSelection(null); document.title = '아주 학습 자료실';
         return;
       }
       const id = route.kind === 'read' ? route.documentId : '';
-      view.setSelection(id);
+      view.setSelection(id, false, history.state?.studyHub?.entryId ?? formatRoute(route));
       const doc = catalog.documents.find(d => d.id === id);
+      if (doc && route.kind === 'read') {
+        const url = new URL(doc.url, location.origin);
+        // Match the reader URL construction without parsing or normalizing its opaque query.
+        url.search = route.search ?? ''; url.hash = route.anchor ?? '';
+        if (url.origin === location.origin && url.pathname.startsWith('/content/')) {
+          standalone.href = url.pathname + url.search + url.hash; standalone.hidden = false;
+        }
+      }
       document.title = doc ? doc.title + ' · 아주 학습 자료실' : '자료 오류 · 아주 학습 자료실';
     }
     function renderRoute() {

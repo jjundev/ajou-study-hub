@@ -46,10 +46,9 @@ for (const mode of [
         "missing-checkout": JSON.stringify(valid),
       };
       if (mode !== "missing-file") await writeFile(settings, bodies[mode]!);
-      await expect(
-        verifyActual(settings, { testProjectRoot: root, reportPath: proof }),
-      ).rejects.toThrow();
-      expect(JSON.parse(await readFile(proof, "utf8")).deploymentEligible).toBe(
+      const failure = await verifyActual(settings, { testProjectRoot: root, reportPath: proof }).then(() => null, error => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(JSON.parse(await readFile(proof, "utf8")).deploymentEligible, String(failure)).toBe(
         false,
       );
     } finally {

@@ -9,7 +9,7 @@ const id = (kind: string, course: string, path: string) =>
   createHash("sha256")
     .update(course + "/" + path.replaceAll("\\", "/").normalize("NFC"))
     .digest("hex");
-function title(html: string, fallback: string): string {
+export function documentTitle(html: string, fallback: string): string {
   const visit = (node: DefaultTreeAdapterMap["node"]): string | null => {
     if ("tagName" in node && node.tagName === "title")
       return node.childNodes
@@ -66,7 +66,7 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
       id: id("document", entry.courseId, entry.sourcePath),
       courseId: entry.courseId,
       groupId: group.id,
-      title: title(
+      title: documentTitle(
         new TextDecoder().decode(
           await snapshot.readFile(entry.courseId, entry.sourcePath),
         ),

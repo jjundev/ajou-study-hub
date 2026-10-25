@@ -7,8 +7,19 @@ import { runtimeIssue, type RuntimeException } from '../runtime-exceptions.js';
 import { auditWorkbookFigures } from '../runtime-workbooks.js';
 import { representativePaths } from '../representatives.js';
 import type { Observation } from '../verify-content.js';
+import type { Issue } from '../../src/content/model.js';
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const fail=():never=>{throw Error('Incomplete, stale or changed runtime/build proof');};
+/** Preserved remote references are inventory information, not a runtime failure waiver. */
+function informationalExternalReference(issue: Issue, manifest: BuildReport): boolean {
+ if(issue.code!=='external-reference'||issue.reason!=='External dependency (not collected)'||typeof issue.target!=='string'||issue.target.trim()!==issue.target||/[\s\\\u0000-\u001f]/.test(issue.target))return false;
+ if(!manifest.inputs.some(input=>input.courseId===issue.courseId&&input.path===issue.sourcePath))return false;
+ try {
+  if(!/^(https?:)?\/\//i.test(issue.target))return false;
+  const url=new URL(issue.target,'https://source.invalid/');
+  return ['http:','https:'].includes(url.protocol)&&!!url.hostname&&!url.username&&!url.password;
+ } catch { return false; }
+}
 export function assertRuntimeFresh(manifest:BuildReport,proof:{createdAt:string}):void{
  const age=Date.now()-Date.parse(proof.createdAt);
  if(!Number.isFinite(age)||age<0||age>86400000||Date.parse(proof.createdAt)<Date.parse(manifest.createdAt)||!Number.isFinite(Date.parse(manifest.createdAt)))fail();
@@ -27,7 +38,11 @@ export async function assertReleaseProof(root:string,directory:string,manifest:B
  for(const file of manifest.outputs){
   if(!Number.isSafeInteger(file.size)||file.size<0||!/^([a-f0-9]{64})$/.test(file.sha256)||file.path.includes('\\')||file.path.includes('\0')||file.path.split('/').some(p=>!p||p==='.'||p==='..'||/^\.git$|^\.env|credentials|secrets?\.(?:json|pem)|제작|^backup[-_]|^\.reports$|^\.local$|^_worker\.js$|^\.assetsignore$/i.test(p)))fail();
  }
- for(const issue of manifest.issues){if(issue.severity!=='warning'||!matchingException(issue,exceptions))fail();}
+ for(const issue of manifest.issues){
+  const informational=informationalExternalReference(issue,manifest);
+  const excepted=issue.code==='invalid-reference'&&matchingException(issue,exceptions);
+  if(issue.severity!=='warning'||(!informational&&!excepted))fail();
+ }
  if(!Array.isArray(catalog.documents)||!catalog.documents.length||new Set(catalog.documents.map(d=>d.id)).size!==catalog.documents.length||proof.documentsChecked!==catalog.documents.length||!Array.isArray(proof.documents)||proof.documents.length!==catalog.documents.length)fail();
  const integrity=proof.integrityChecks;
  if(!integrity||integrity.sourceHashesUnchanged!==true||integrity.bundleBytesUnchanged!==true||integrity.sourceTrackingUnchanged!==true||integrity.inputCount!==manifest.inputs.length||integrity.outputCount!==manifest.outputs.length)fail();

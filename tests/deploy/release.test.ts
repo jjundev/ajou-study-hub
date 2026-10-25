@@ -10,11 +10,19 @@ import { representativePaths } from '../../tools/representatives.js';
 import { execFileSync } from 'node:child_process';
 import { courses } from '../../config/courses.js';
 import { inspectBoundSources } from '../../tools/source-binding.js';
+import { assertReleaseProof } from '../../tools/deploy/release-proof.js';
 const settings={accountId:'a'.repeat(32),workerName:'ajou-study-hub',allowedEmail:'owner@example.test',accessAppId:'11111111-1111-1111-1111-111111111111',productionUrl:'https://ajou-study-hub.example.workers.dev',previewUrls:[]};
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const roots:string[]=[];
 const template=resolve('.generated/verification-tests',randomUUID());
-beforeAll(async()=>{await mkdir(resolve(template,'복습노트/1024'),{recursive:true});await writeFile(resolve(template,'복습노트/1024/test.html'),'synthetic');const git=(...args:string[])=>execFileSync('git',args,{cwd:template,stdio:'pipe'});git('init','-q');git('config','user.email','fixture@example.invalid');git('config','user.name','Fixture');git('add','.');git('commit','-qm','fixture');});
+beforeAll(async()=>{
+ await mkdir(resolve(template,'복습노트/1024'),{recursive:true});
+ await writeFile(resolve(template,'복습노트/1024/test.html'),'synthetic');
+ const git=(...args:string[])=>execFileSync('git',args,{cwd:template,stdio:'pipe'});
+ git('init','-q');git('add','.');
+ // Configure the commit itself instead of paying for two extra Git startups.
+ git('-c','user.email=fixture@example.invalid','-c','user.name=Fixture','commit','-qm','fixture');
+});
 afterAll(async()=>{await rm(template,{recursive:true,force:true});});
 afterEach(async()=>{for(const root of roots.splice(0)) await rm(root,{recursive:true,force:true});});
 async function fixture(){
@@ -42,6 +50,30 @@ async function fixture(){
  return {root,put,proof,manifest,options,upload,readAccessSnapshot,snapshot,source,sourcePath,sourceSettings,git};
 }
 describe('guarded private release (synthetic only)',()=>{
+ it('accepts captured informational external references and separately checks the exact runtime font exception',async()=>{
+  const f=await fixture();
+  const external={code:'external-reference',courseId:'logic-lab',sourcePath:f.sourcePath,target:'https://cdn.example.test/library.js',reason:'External dependency (not collected)',severity:'warning'};
+  const exceptions=JSON.parse(await readFile(resolve('config/content-exceptions.json'),'utf8'));
+  const exception=exceptions[0];
+  const catalog=JSON.parse(await readFile(resolve(f.options.distDir,'catalog.json'),'utf8'));
+  const fontDoc={id:'font-doc',courseId:exception.courseId,sourcePath:exception.sourcePath,url:'/content/'+exception.courseId+'/'+exception.sourcePath.split('/').map(encodeURIComponent).join('/'),listed:false};
+  catalog.documents.push(fontDoc);await f.put('dist/catalog.json',catalog);await f.put('dist/'+decodeURIComponent(fontDoc.url.slice(1)),'synthetic font document');
+  const manifest={...f.manifest,issues:[external,{...external,target:'//example.test/outbound?x=1#section'}],outputs:await inventory(f.options.distDir)};
+  manifest.bundleHash=hash(manifest.outputs.map(x=>`${x.path}\0${x.sha256}\n`).join(''));
+  const text='Readable synthetic fallback text. '.repeat(5);
+  const proof={...f.proof,bundleHash:manifest.bundleHash,catalogHash:manifest.outputs.find(x=>x.path==='catalog.json')!.sha256,exceptions,
+   documentsChecked:catalog.documents.length,documents:[...f.proof.documents,{documentId:fontDoc.id,title:'Font fixture',images:0,pendingRequests:[],responses:[{url:'http://127.0.0.1:1234'+fontDoc.url,status:200}]}],
+   observations:[{documentId:fontDoc.id,classification:'external',kind:'requestfailed',target:exception.target,reason:'net::ERR_BLOCKED_BY_ORB'}],
+   issues:[{code:'runtime-external-requestfailed',courseId:fontDoc.courseId,sourcePath:fontDoc.sourcePath,target:exception.target,reason:'net::ERR_BLOCKED_BY_ORB; Explicit exception: '+exception.reason,severity:'warning'}],
+   fontFallbackChecks:[{documentId:fontDoc.id,readable:true,source:{text,width:400,height:200,fontStack:'Arial, sans-serif'},copy:{text,width:400,height:200,fontStack:'Arial, sans-serif'}}],
+   integrityChecks:{...f.proof.integrityChecks,outputCount:manifest.outputs.length}};
+  await f.put('config/content-exceptions.json',exceptions);
+  await expect(assertReleaseProof(f.root,f.options.distDir,manifest as any,proof)).resolves.toBeUndefined();
+  for(const issue of [{...external,code:'unknown-warning'},{...external,severity:'error'},{...external,target:'javascript:alert(1)'},{...external,target:'https://user:secret@example.test/a'},{...external,reason:'fetch failed'},{...external,sourcePath:'not-captured.css'}])
+   await expect(assertReleaseProof(f.root,f.options.distDir,{...manifest,issues:[issue]} as any,proof)).rejects.toThrow();
+  await expect(assertReleaseProof(f.root,f.options.distDir,manifest as any,{...proof,observations:[{...proof.observations[0],reason:'net::ERR_FAILED'}]})).rejects.toThrow();
+  await expect(assertReleaseProof(f.root,f.options.distDir,manifest as any,{...proof,observations:[{...proof.observations[0],target:'https://cdn.example.test/broken.js'}]})).rejects.toThrow();
+ });
  for(const checkpoint of ['initial','second'] as const)it.each(['bytes','deletion','tracking','selection','explicitUntracked','settings-bytes','root-switch'])('blocks current source %s mutation at '+checkpoint,async kind=>{
   const f=await fixture();const mutate=async()=>{
    if(kind==='bytes')await f.put('source/'+f.sourcePath,'changed');

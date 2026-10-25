@@ -68,7 +68,7 @@ test("reproducible_output, immutable_sources, no_stale_files and explicit untrac
     await f.dispose();
     await rm(outputDir, { recursive: true, force: true });
   }
-}, 30000);
+});
 test("refuses_mixed_snapshot and records original bytes/hash", async () => {
   const f = await createSourceFixture();
   try {

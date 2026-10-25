@@ -48,7 +48,7 @@ nav { display: grid; gap: 4px; }
 .reader-introduction p { color: var(--muted); }
 .storage-note { border-top: 1px solid var(--line); padding-top: 24px; margin-top: 32px; font-size: .875rem; }
 .reader-course { color: var(--muted); font-size: .875rem; margin-bottom: 8px; }
-.reader-message { margin-top: 20px; color: var(--muted); }
+.reader-actions { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
 .empty-hint { color: var(--muted); margin-top: 10px; font-size: .875rem; }
 .material-groups > h2:not(.course-heading) { margin-top: 24px; font-size: 1rem; }
 .load-state { max-width: 680px; margin: 64px auto; padding: 24px; }

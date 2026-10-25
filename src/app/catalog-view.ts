@@ -17,6 +17,7 @@ function button(text: string, action: () => void, className?: string) {
 export function mountCatalog(root: HTMLElement, catalog: Catalog, onSelect: (documentId: string) => void, onBrowse?: (state: BrowseState) => void) {
   let state: BrowseState = {};
   let selected: string | null = null;
+  let readingEntry: string | undefined;
   let expanded = true;
   const listed = catalog.documents.filter(d => d.listed);
   const shell = element('div', undefined, 'workspace');
@@ -106,7 +107,7 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog, onSelect: (doc
     const doc = catalog.documents.find(d => d.id === selected);
     selection.replaceChildren();
     if (doc) {
-      selection.append(element('p', catalog.courses.find(c => c.id === doc.courseId)?.name ?? '', 'reader-course'), element('h2', doc.title), element('p', '자료를 선택했습니다. 본문 보기는 다음 단계에서 연결됩니다.', 'reader-message'));
+      selection.append(element('p', catalog.courses.find(c => c.id === doc.courseId)?.name ?? '', 'reader-course'), element('h2', doc.title));
     } else {
       const introduction = element('div', undefined, 'reader-introduction');
       introduction.append(element('h2', '오늘 공부할 자료를 선택하세요'), element('p', '과목과 학습 묶음별로 정리된 자료를 한곳에서 찾아보세요. 제목이나 날짜를 검색해 바로 찾을 수 있습니다.'), element('p', '학습 기록은 현재 브라우저에 저장됩니다.', 'storage-note'));
@@ -127,7 +128,9 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog, onSelect: (doc
   }
   updateExpanded(); render(); renderSelection();
   return {
-    setSelection(id: string | null, preserveReader = false) {
+    setSelection(id: string | null, preserveReader = false, entry = id ?? undefined) {
+      const entering = !!id && !!catalog.documents.find(d => d.id === id) && readingEntry !== entry;
+      readingEntry = entry;
       selected = id;
       if (preserveReader) {
         const doc = catalog.documents.find(d => d.id === id);
@@ -137,6 +140,11 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog, onSelect: (doc
         if (course && doc) course.textContent = catalog.courses.find(c => c.id === doc.courseId)?.name ?? '';
       } else renderSelection();
       renderGroups();
+      if (entering && matchMedia('(max-width: 767px)').matches) {
+        expanded = false; updateExpanded();
+        reader.focus({ preventScroll: true });
+        reader.scrollIntoView({ block: 'start' });
+      }
     },
     setBrowseState(next: BrowseState) { state = { ...next }; render(); },
     destroy() { shell.remove(); },

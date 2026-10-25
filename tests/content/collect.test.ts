@@ -8,7 +8,56 @@ import { buildCatalog } from "../../tools/content/catalog.js";
 import { collectDependencies } from "../../tools/content/collect.js";
 import { resolveReference } from "../../tools/content/paths.js";
 import { extractReferences } from "../../tools/content/references.js";
+import { verifySnapshot } from "../../tools/content/source.js";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 describe("dependency closure", () => {
+  it.each(['untracked.txt', '.env'])('rejects tracked child aliases to unselected %s bytes at inspection', async target => {
+    const f = await createSourceFixture();
+    try {
+      await f.write('복습노트/1024/start.html', '<a href="diagram.txt">diagram</a>');
+      await f.write('복습노트/' + target, 'synthetic-secret');
+      await symlink(join(f.root, '복습노트', target), join(f.root, '복습노트/1024/diagram.txt'), 'file');
+      execFileSync('git', ['add', '--', '복습노트/1024'], {cwd:f.root});
+      await expect(inspectSources([f.config], f.settings)).rejects.toThrow(/Symlink source/);
+    } finally { await f.dispose(); }
+  });
+  it('rejects in-root directory aliases but permits canonical resolution of the configured root', async () => {
+    const f = await createSourceFixture();
+    const rootAlias = f.root + '-alias';
+    try {
+      await f.write('복습노트/1024/a.html', 'original'); await f.track();
+      await symlink(join(f.root, '복습노트/1024'), join(f.root, '복습노트/alias'), process.platform === 'win32' ? 'junction' : 'dir');
+      expect((await resolveReference({courseId:f.config.id,from:'복습노트/1024/a.html',ref:'../alias/a.html'},f.config,f.root)).kind).toBe('invalid');
+      await symlink(f.root, rootAlias, process.platform === 'win32' ? 'junction' : 'dir');
+      const snapshot=await inspectSources([f.config], {...f.settings,roots:{[f.config.id]:rootAlias}});
+      expect(new TextDecoder().decode(await snapshot.readFile(f.config.id,'복습노트/1024/a.html'))).toBe('original');
+    } finally { await rm(rootAlias,{force:true}); await f.dispose(); }
+  });
+  it('rejects a same-byte child alias introduced after capture during reads and final recheck', async () => {
+    const f = await createSourceFixture();
+    try {
+      const path='복습노트/1024/a.html';
+      await f.write(path,'original'); await f.track();
+      const snapshot=await inspectSources([f.config],f.settings);
+      await snapshot.readFile(f.config.id,path);
+      await f.write('복습노트/untracked.html','original'); await rm(join(f.root,path));
+      await symlink(join(f.root,'복습노트/untracked.html'),join(f.root,path),'file');
+      await expect(snapshot.readFile(f.config.id,path)).rejects.toThrow(/Symlink source/);
+      await expect(verifySnapshot(snapshot)).rejects.toThrow(/Symlink source/);
+    } finally { await f.dispose(); }
+  });
+  it('uses the linked document title while retaining its stable unlisted identity and filename fallback', async () => {
+    const f=await createSourceFixture();
+    try {
+      await f.write('복습노트/1024/start.html','<a href=".pack/long-file.html">linked</a><a href=".pack/fallback.html">fallback</a>');
+      await f.write('복습노트/1024/.pack/long-file.html','<title> 추가 &amp; 심화 학습 </title>');
+      await f.write('복습노트/1024/.pack/fallback.html','<title> </title>'); await f.track();
+      const snapshot=await inspectSources([f.config],f.settings), graph=await collectDependencies(snapshot,await buildCatalog(snapshot),[f.config]);
+      expect(graph.linkedDocuments.map(d=>({title:d.title,listed:d.listed}))).toEqual([{title:'추가 & 심화 학습',listed:false},{title:'fallback',listed:false}]);
+      expect(graph.linkedDocuments[0]!.id).toBe('document-'+createHash('sha256').update(f.config.id+'/복습노트/1024/.pack/long-file.html').digest('hex'));
+    } finally { await f.dispose(); }
+  });
   it("encoded_paths_and_hidden_assets", async () => {
     const f = await createSourceFixture();
     try {

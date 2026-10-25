@@ -8,11 +8,9 @@ export async function createSourceFixture() {
   const root = await mkdtemp(join(tmpdir(), "study-source-"));
   const git = (...args: string[]) => execFileSync("git", args, { cwd: root });
   git("init", "-q");
-  git("config", "user.email", "fixture@example.invalid");
-  git("config", "user.name", "Fixture");
   await writeFile(join(root, ".fixture"), "synthetic");
   git("add", ".");
-  git("commit", "-qm", "fixture");
+  git("-c", "user.email=fixture@example.invalid", "-c", "user.name=Fixture", "commit", "-qm", "fixture");
   const config = structuredClone(courses[0]!);
   config.extraFiles = []; // Unit fixtures opt into their own dynamic dependencies.
   const settings: SourceSettings = {

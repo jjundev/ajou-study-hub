@@ -5,6 +5,7 @@ import type { Catalog, DocumentInfo, Issue } from "../../src/content/model.js";
 import type { SourceSnapshot } from "./source.js";
 import { resolveReference, sourcePath } from "./paths.js";
 import { extractReferences, extractBase } from "./references.js";
+import { documentTitle } from "./catalog.js";
 export type CollectedFile = {
   courseId: string;
   sourcePath: string;
@@ -90,7 +91,7 @@ export async function collectDependencies(
               .digest("hex"),
           courseId: item.courseId,
           groupId: group?.id ?? null,
-          title: posix.basename(item.path).replace(/\.html?$/i, ""),
+          title: documentTitle(text, posix.basename(item.path).replace(/\.html?$/i, "")),
           type:
             config.typeRules.find((r) =>
               new RegExp(r.pattern).test(posix.basename(item.path)),

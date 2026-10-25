@@ -7,6 +7,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { dirname, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Issue } from "../../src/content/model.js";
 import type { SourceProvenance } from "./source.js";
@@ -75,8 +76,19 @@ export async function writeReport(
       flag: "wx",
       mode: 0o600,
     });
-    await validateReportPath(path, exclusions, projectRoot);
-    await rename(temporary, path);
+    // Windows scanners/readers can briefly prevent replacement. Keep publication
+    // atomic and bounded; every retry must pass the complete ownership checks.
+    const backoff = [25, 50, 100, 200];
+    for (let attempt = 0; ; attempt++) {
+      await validateReportPath(temporary, exclusions, projectRoot);
+      await validateReportPath(path, exclusions, projectRoot);
+      try { await rename(temporary, path); break; }
+      catch (error) {
+        if (process.platform !== 'win32' || attempt >= backoff.length ||
+            !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        await delay(backoff[attempt]!);
+      }
+    }
   } finally {
     await validateReportPath(temporary, exclusions, projectRoot);
     try {

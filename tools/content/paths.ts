@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { resolve, relative, isAbsolute, posix } from "node:path";
 import type { CourseConfig } from "../../config/courses.js";
 export type ResolvedReference =
@@ -35,8 +35,16 @@ export async function validateSourcePath(
   const p = sourcePath(path);
   if (!config.allowedRoots.some((r) => within(p, sourcePath(r))))
     throw new Error(`Source not allowed: ${p}`);
-  const root = await realpath(repoRoot),
-    target = await realpath(resolve(root, p));
+  const root = await realpath(repoRoot);
+  // The configured checkout may resolve canonically, but child aliases must
+  // never borrow the selection/filename authorization of their logical name.
+  let child = root;
+  for (const segment of p.split('/')) {
+    child = resolve(child, segment);
+    if ((await lstat(child)).isSymbolicLink())
+      throw new Error(`Symlink source child: ${p}`);
+  }
+  const target = await realpath(child);
   if (!contained(root, target))
     throw new Error(`Source escapes repository: ${p}`);
   let allowed = false;

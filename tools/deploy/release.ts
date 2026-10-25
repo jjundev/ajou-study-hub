@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { fixedUploadConfig as fixedConfig, runWranglerUpload, parseUploadReceipt } from './wrangler-upload.js';
+export { parseUploadReceipt };
 import { readAccessSnapshot, settingsFingerprint, validateSettings, type DeploymentSettings, type ProtectionEvidence } from './access.js';
 import { assertReleaseAllowed } from './guard.js';
 import { assertReleaseProof, assertRuntimeFresh } from './release-proof.js';
@@ -14,35 +15,12 @@ export type ReleaseDependencies={readAccessSnapshot:typeof readAccessSnapshot;up
 type Options={settings:DeploymentSettings;distDir:string;reportPath:string;testProjectRoot?:string};
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const version=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-/** Wrangler 4.152.0 deploy prints an exact trigger URL and Current Version ID. */
-export function parseUploadReceipt(output:string,expectedUrl:string):{url:string;versionId:string}{
- const clean=output.replace(/\x1b\[[0-9;]*m/g,'');
- const ids=[...clean.matchAll(/^Current Version ID:\s*(\S+)\s*$/gm)];
- const urls=clean.split(/\r?\n/).map(s=>s.trim()).filter(s=>/^https?:\/\/\S+$/.test(s));
- if(ids.length!==1||!version.test(ids[0]![1]!)||urls.length!==1||urls[0]!==expectedUrl)throw Error('Upload receipt does not confirm the protected target/version');
- return {url:expectedUrl,versionId:ids[0]![1]!};
-}
-function fixedConfig(settings:DeploymentSettings,directory:string){return {name:settings.workerName,account_id:settings.accountId,compatibility_date:'2026-10-24',workers_dev:true,preview_urls:false,assets:{directory,html_handling:'none',not_found_handling:'404-page'}};}
 async function validateProjectConfig(root:string):Promise<string>{
  const path=resolve(root,'wrangler.jsonc');if((await lstat(path)).isSymbolicLink())throw Error('Symlink Wrangler configuration');
  const text=await readFile(path,'utf8');const config=JSON.parse(text);
  const expected={name:'ajou-study-hub',compatibility_date:'2026-10-24',assets:{directory:'./dist',html_handling:'none',not_found_handling:'404-page'}};
  // Deliberately reject unknown options, env/main/routes/hooks/run_worker_first, even if harmless today.
  if(!same(config,expected))throw Error('Unreviewed Wrangler configuration');return text;
-}
-async function runWrangler(root:string,directory:string,configPath:string,settings:DeploymentSettings):Promise<{url:string;versionId:string}>{
- const config=fixedConfig(settings,directory);
- if(!same(JSON.parse(await readFile(configPath,'utf8')),config))throw Error('Changed sealed upload configuration');
- const env:NodeJS.ProcessEnv={};
- for(const name of ['PATH','Path','SystemRoot','SYSTEMROOT','WINDIR','TEMP','TMP','HOME','USERPROFILE','APPDATA','LOCALAPPDATA','CLOUDFLARE_API_TOKEN','NODE_EXTRA_CA_CERTS'])if(process.env[name])env[name]=process.env[name];
- Object.assign(env,{CLOUDFLARE_ACCOUNT_ID:settings.accountId,WRANGLER_SEND_METRICS:'false',WRANGLER_WRITE_LOGS:'false',WRANGLER_LOG_SANITIZE:'true',WRANGLER_LOG:'log',CI:'true',NO_COLOR:'1'});
- // A fresh isolated cwd/config means no dotenv, build hook, framework config or redirect discovery.
- const output=await new Promise<string>((done,reject)=>{
-  const child=spawn(process.execPath,[resolve(root,'node_modules/wrangler/bin/wrangler.js'),'deploy','--config',configPath,'--strict','--autoconfig=false'],{cwd:dirname(configPath),env,stdio:['ignore','pipe','pipe']});
-  let stdout='';child.stdout.on('data',b=>{stdout+=b.toString();if(stdout.length>1024*1024){child.kill();reject(Error('Upload output limit'));}});child.stderr.resume();
-  child.once('error',()=>reject(Error('Wrangler upload could not start')));child.once('exit',code=>code===0?done(stdout):reject(Error('Wrangler upload failed; inspect target before retrying')));
- });
- return parseUploadReceipt(output,settings.productionUrl);
 }
 /** The sole private upload path. No rebuild, mutable dist hardlinks, or caller CLI overrides. */
 export async function releasePrivate(options:Options,deps?:ReleaseDependencies):Promise<{url:string;versionId:string;bundleHash:string}>{
@@ -91,7 +69,7 @@ export async function releasePrivate(options:Options,deps?:ReleaseDependencies):
   await writeReport({status:'upload-started-outcome-unknown',bundleHash:manifest.bundleHash,acceptanceComplete:false,checkedAt:new Date().toISOString()},receiptPath,[dist,directory],root);
   assertRuntimeFresh(manifest,proof);
   assertReleaseAllowed({settings,snapshot:current,evidence});
-  const receipt=await (deps?.upload??((dir:string)=>runWrangler(root,dir,configPath,settings)))(directory);
+  const receipt=await (deps?.upload??((dir:string)=>runWranglerUpload(root,dir,configPath,settings)))(directory);
   if(receipt.url!==settings.productionUrl||!version.test(receipt.versionId))throw Error('Invalid upload receipt; inspect target before retrying');
   await writeReport({...receipt,bundleHash:manifest.bundleHash,uploadedAt:new Date().toISOString(),status:'uploaded-acceptance-pending',acceptanceComplete:false,policyFingerprint:current.fingerprint,settingsFingerprint:settingsFingerprint(settings)},receiptPath,[dist,directory],root);
   return {...receipt,bundleHash:manifest.bundleHash};

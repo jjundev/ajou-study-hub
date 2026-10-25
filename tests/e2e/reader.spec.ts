@@ -26,6 +26,7 @@ test('follows_internal_links and restores_route through refresh/back/forward',as
  await expect(page).toHaveURL(/#\/read\/doc-a$/);
  await page.frameLocator('iframe').getByRole('link',{name:'내부 링크'}).click();
  await expect(page).toHaveURL(/doc-b\?anchor=part$/); await expect(page.getByRole('heading',{name:'연결된 설명'})).toBeVisible();
+ await expect(page.getByRole('link',{name:'새 탭에서 열기',exact:true})).toHaveAttribute('href',docs[1]!.url+'#part');
  await expect.poll(() => page.locator('iframe').evaluate((el:any) => el.contentWindow.location.pathname)).toContain('%EC%97%B0');
  await page.reload(); await expect(page.frameLocator('iframe').getByRole('heading',{name:'B',exact:true})).toBeVisible();
  await page.goBack(); await expect(page).toHaveURL(/doc-a$/); await expect(page.frameLocator('iframe').getByRole('heading',{name:'A',exact:true})).toBeVisible();

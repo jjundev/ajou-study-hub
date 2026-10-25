@@ -85,6 +85,9 @@ export async function inspectSources(
       normalized.add(n);
     }
     for (const allowed of config.allowedRoots) pathName(allowed);
+    for (const p of selected)
+      if (config.allowedRoots.some(r => p === r || p.startsWith(r + '/')))
+        await validateSourcePath(p, config, root);
     sources.set(config.id, {
       root,
       config,

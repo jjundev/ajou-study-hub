@@ -3,8 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawn } from 'node:child_process';
-import { validateSettings, assertFreeSubscriptions } from './access.js';
+import { validateSettings, assertFreeSubscriptions, type DeploymentSettings } from './access.js';
+import { fixedUploadConfig, runWranglerUpload } from './wrangler-upload.js';
 import { checkBundle, bundleLimits } from '../content/preflight.js';
 import { writeReport, type BuildReport } from '../content/report.js';
 const project = fileURLToPath(new URL('../../', import.meta.url));
@@ -83,6 +83,21 @@ export async function assertBootstrapBundle(directory:string,report:BuildReport)
   const catalog=JSON.parse(await readFile(resolve(directory,'catalog.json'),'utf8'));
   if(JSON.stringify(catalog)!==JSON.stringify({version:1,courses:[],groups:[],documents:[]}))throw Error('Bootstrap catalog is not empty');
 }
+export async function uploadBootstrapBundle(root:string,directory:string,settings:DeploymentSettings,token=process.env.CLOUDFLARE_API_TOKEN):Promise<void>{
+  const owned = resolve(root, '.generated');
+  await mkdir(owned, { recursive: true });
+  if ((await lstat(owned)).isSymbolicLink() || await realpath(owned) !== owned) throw Error('Unsafe bootstrap upload staging root');
+  const stage = resolve(owned, 'bootstrap-upload-' + randomUUID());
+  await mkdir(stage);
+  try {
+    const config = resolve(stage, 'wrangler.json');
+    await writeFile(config, JSON.stringify(fixedUploadConfig(settings, directory)), { flag: 'wx', mode: 0o600 });
+    await runWranglerUpload(root, directory, config, settings, token);
+  } finally {
+    if (dirname(stage) !== owned || (await lstat(stage)).isSymbolicLink() || await realpath(stage) !== stage) throw Error('Unsafe bootstrap upload cleanup');
+    await rm(stage, { recursive: true, force: true });
+  }
+}
 export async function uploadBootstrap():Promise<void>{
   await writeReport({passed:false,status:'bootstrap-upload-started',checkedAt:new Date().toISOString()},resolve(project,'.reports/access-evidence.json'),[resolve(project,'dist')],project);
   try {
@@ -105,10 +120,7 @@ export async function uploadBootstrap():Promise<void>{
     await assertBootstrapBundle(result.directory,report);
     const outputs=await inventory(result.directory);
     if(report.sources.length||report.inputs.length||JSON.stringify(outputs)!==JSON.stringify(report.outputs)||report.bundleHash!==result.bundleHash||sha(outputs.map(f=>`${f.path}\0${f.sha256}\n`).join(''))!==result.bundleHash)throw Error('Bootstrap changed');
-    const config=resolve(project,'.reports/bootstrap-upload.json');
-    // No user-supplied Wrangler configuration, entry point, route or asset directory.
-    await writeReport({name:settings.workerName,account_id:settings.accountId,compatibility_date:'2026-10-24',workers_dev:true,preview_urls:false,assets:{directory:result.directory,html_handling:'none',not_found_handling:'404-page'}},config,[result.directory],project);
-    await new Promise<void>((done,reject)=>{const child=spawn(process.execPath,[resolve(project,'node_modules/wrangler/bin/wrangler.js'),'deploy','--config',config],{cwd:project,env:{...process.env,CLOUDFLARE_ACCOUNT_ID:settings.accountId},stdio:'ignore'});child.once('error',reject);child.once('exit',code=>code===0?done():reject(Error('Upload failed')));});
+    await uploadBootstrapBundle(project,result.directory,settings,token);
   }catch{throw Error('Empty bootstrap upload failed; no private upload is authorized');}
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(resolve(process.argv[1])).href) void (async()=>{
