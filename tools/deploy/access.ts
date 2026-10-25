@@ -8,7 +8,7 @@ import { writeReport, type BuildReport } from '../content/report.js';
 import { inventory } from './bootstrap.js';
 import { assertReleaseAllowed, sentinelPaths } from './guard.js';
 export type DeploymentSettings={accountId:string;workerName:string;allowedEmail:string;accessAppId:string;productionUrl:string;previewUrls:string[]};
-export type AccessSnapshot={accountId:string;workerName:string;accessAppId:string;allowedEmails:string[];workerWide:boolean;hasBypass:boolean;hosts:string[];freePlan:boolean;fingerprint:string};
+export type AccessSnapshot={accountId:string;workerName:string;accessAppId:string;allowedEmails:string[];workerWide:boolean;hasBypass:boolean;hosts:string[];freePlan:boolean;fingerprint:string;authDomain:string};
 export type ProtectionEvidence={accountId:string;workerName:string;accessAppId:string;checkedAt:string;settingsFingerprint:string;policyFingerprint:string;hosts:string[];anonymousBlocked:boolean;otherAccountBlocked:boolean;ownerAllowed:boolean;sentinelHashes:Record<string,string>};
 type Obj=Record<string,any>;
 const object=(v:unknown):v is Obj=>!!v&&typeof v==='object'&&!Array.isArray(v);
@@ -22,7 +22,11 @@ export function validateSettings(v:unknown):asserts v is DeploymentSettings {
  if(new Set(urls).size!==urls.length)fail();
 }
 export function settingsFingerprint(settings:DeploymentSettings):string {validateSettings(settings);return hash(stable({...settings,previewUrls:[...settings.previewUrls].sort()}));}
-export type AccessReadData={worker:Obj;apps:Obj[];policies:Record<string,Obj[]>;idps:Obj[];hosts:string[];subscriptions:Obj[]};
+export type AccessReadData={worker:Obj;apps:Obj[];policies:Record<string,Obj[]>;idps:Obj[];hosts:string[];subscriptions:Obj[];organization:Obj};
+function teamOrigin(authDomain:unknown):string{
+ if(typeof authDomain!=='string'||!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.cloudflareaccess\.com$/.test(authDomain))fail();
+ return 'https://'+authDomain;
+}
 export function assertFreeSubscriptions(value:unknown):asserts value is Obj[]{
  if(!Array.isArray(value)||!value.length||!value.every(s=>object(s)&&s.state==='Provisioned'&&s.price===0&&object(s.rate_plan)&&typeof s.rate_plan.id==='string'&&['Workers Free','Zero Trust Free'].includes(s.rate_plan.public_name)))fail();
  const plans=new Set(value.map(s=>s.rate_plan.public_name));if(!plans.has('Workers Free')||!plans.has('Zero Trust Free'))fail();
@@ -31,7 +35,8 @@ export function assertFreeSubscriptions(value:unknown):asserts value is Obj[]{
  * Unknown policy rules and all overlapping hostname/path/preview apps fail closed. */
 export function normalizeAccess(settings:DeploymentSettings,data:AccessReadData):AccessSnapshot {
  validateSettings(settings);
- const {worker,apps,policies,idps,hosts,subscriptions}=data;
+ const {worker,apps,policies,idps,hosts,subscriptions,organization}=data;
+ if(!object(organization))fail();teamOrigin(organization.auth_domain);
  if(!object(worker)||worker.name!==settings.workerName||typeof worker.id!=='string'||!worker.id||worker.id===worker.name)fail();
  if(!Array.isArray(apps)||!Array.isArray(idps)||!Array.isArray(hosts)||!Array.isArray(subscriptions)||!subscriptions.length)fail();
  // Only explicitly provisioned, zero-price subscriptions whose plan explicitly says Free.
@@ -55,8 +60,8 @@ export function normalizeAccess(settings:DeploymentSettings,data:AccessReadData)
   for(const domain of domains){if(typeof domain!=='string')fail(); const hostname=domain.replace(/^https:\/\//,'').split('/')[0]!;const regex=new RegExp('^'+hostname.split('*').map((s:string)=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('.*')+'$','i');if(hosts.some(h=>regex.test(new URL(h).hostname)))fail();}
   for(const d of destinations)if(!object(d)||!['public','private','via_mcp_server_portal','worker','preview_worker','all_workers','all_preview_workers'].includes(d.type)||(['worker','preview_worker'].includes(d.type)&&d.worker_id===worker.id))fail();
  }
- const fingerprint=hash(stable({worker,apps,policies,idps,hosts:expected,subscriptions}));
- return {accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,allowedEmails:[settings.allowedEmail],workerWide:true,hasBypass:false,hosts:expected,freePlan:true,fingerprint};
+ const fingerprint=hash(stable({worker,apps,policies,idps,hosts:expected,subscriptions,organization}));
+ return {accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,allowedEmails:[settings.allowedEmail],workerWide:true,hasBypass:false,hosts:expected,freePlan:true,fingerprint,authDomain:organization.auth_domain};
 }
 export type ReadOptions={fetch?:typeof fetch;token?:string};
 /** GET-only API; no auth bodies or Cloudflare error text escape this boundary. */
@@ -81,14 +86,44 @@ export async function readAccessSnapshot(settings:DeploymentSettings,options:Rea
  const apps=await list(base+'/access/apps');const policies:Record<string,Obj[]>={};
  for(const app of apps){if(typeof app.id!=='string')fail();policies[app.id]=await list(base+'/access/apps/'+encodeURIComponent(app.id)+'/policies');}
  const idps=await list(base+'/access/identity_providers',false),subscriptions=await list(base+'/subscriptions',false);
- return normalizeAccess(settings,{worker,apps,policies,idps,subscriptions,hosts:[`https://${settings.workerName}.${accountSub.subdomain}.workers.dev`]});
+ const organization=(await get(base+'/access/organizations')).result;
+ return normalizeAccess(settings,{worker,apps,policies,idps,subscriptions,organization,hosts:[`https://${settings.workerName}.${accountSub.subdomain}.workers.dev`]});
  }catch{throw Error('Cloudflare Access read failed; protection remains unverified');}
 }
 export type VerifyOptions=ReadOptions&{testProjectRoot?:string;reportPath?:string};
-export function recognizedAccessDenial(response:{status:number;headers:Record<string,string>;body:Uint8Array},expected:Uint8Array,url:string):boolean{
+type ProbeResponse={status():number;headers():Record<string,string>;body():Promise<Buffer>;json():Promise<any>};
+type ProbeRequest={get(url:string,options:{maxRedirects:number}):Promise<ProbeResponse>};
+/** Browser cookie scoping supplies the existing team session. No explicit cookie/token
+ * header is copied from a Worker or a caller-provided URL to the identity service. */
+export async function readVerifiedIdentity(request:ProbeRequest,authDomain:string,accountId:string):Promise<string>{
+ try{
+ const response=await request.get(teamOrigin(authDomain)+'/cdn-cgi/access/get-identity',{maxRedirects:0});
+ if(response.status()!==200)fail();const identity=await response.json();
+ if(!object(identity)||identity.account_id!==accountId||typeof identity.user_uuid!=='string'||!identity.user_uuid||typeof identity.email!=='string'||!/^\S+@[^\s@]+\.[^\s@]+$/.test(identity.email)||identity.service_token_status!==false||identity.service_token_id)fail();
+ return identity.email;
+ }catch{throw Error('Independent Access identity could not be verified');}
+}
+/** An independently verified team session must actually finish the target authorization
+ * flow. Its initial anonymous-style login redirect is not evidence of a policy denial. */
+export async function verifyOtherAccountDenial(request:ProbeRequest,target:string,authDomain:string,expected:Uint8Array):Promise<boolean>{
+ try{
+ const trustedTeam=teamOrigin(authDomain),targetUrl=new URL(target),targetOrigin=targetUrl.origin;let current=target;
+ if(targetUrl.protocol!=='https:'||targetUrl.username||targetUrl.password||targetUrl.port)return false;
+ for(let step=0;step<8;step++){
+  const r=await request.get(current,{maxRedirects:0}),body=await r.body();
+  if(r.status()===403)return recognizedAccessDenial({status:r.status(),headers:r.headers(),body},expected,current);
+  if(body.includes(Buffer.from(expected))||![302,303,307,308].includes(r.status())||!r.headers().location)return false;
+  let next:URL;try{next=new URL(r.headers().location!,current);}catch{return false;}
+  if(next.protocol!=='https:'||next.username||next.password||![trustedTeam,targetOrigin].includes(next.origin))return false;
+  current=next.href;
+ }
+ return false;
+ }catch{return false;}
+}
+export function recognizedAccessDenial(response:{status:number;headers:Record<string,string>;body:Uint8Array},expected:Uint8Array,url:string,authDomain?:string):boolean{
  const body=Buffer.from(response.body);if(body.includes(Buffer.from(expected)))return false;
  const location=response.headers.location;
- if([302,303,307].includes(response.status)&&location){try{const u=new URL(location,url);return u.protocol==='https:'&&u.hostname.endsWith('.cloudflareaccess.com')&&u.pathname.startsWith('/cdn-cgi/access/login');}catch{return false;}}
+ if([302,303,307].includes(response.status)&&location){try{const u=new URL(location,url);return !!authDomain&&u.origin===teamOrigin(authDomain)&&!u.username&&!u.password&&u.pathname.startsWith('/cdn-cgi/access/login');}catch{return false;}}
  return response.status===403&&!!response.headers['cf-ray']&&/Cloudflare Access|Access denied/i.test(body.toString('utf8'));
 }
 /** Invalidation happens before settings, auth state, bootstrap, or network reads. */
@@ -106,12 +141,13 @@ export async function verifyProtection(settings?:DeploymentSettings,options:Veri
  // Separate browser contexts; state never leaves ignored local storage and is never logged.
  const browser=await chromium.launch();try{
  const owner=await browser.newContext({storageState:resolve(root,'.local/auth/owner.json')}),other=await browser.newContext({storageState:resolve(root,'.local/auth/other.json')}),anonymous=await browser.newContext();
+ const ownerEmail=await readVerifiedIdentity(owner.request,snapshot.authDomain,settings.accountId),otherEmail=await readVerifiedIdentity(other.request,snapshot.authDomain,settings.accountId);
+ if(ownerEmail!==settings.allowedEmail||otherEmail===settings.allowedEmail)fail();
  for(const host of snapshot.hosts){
-  const identities=[];for(const context of [owner,other]){const r=await context.request.get(host+'/cdn-cgi/access/get-identity',{maxRedirects:0});if(r.status()!==200)fail();const identity=await r.json();if(!object(identity)||typeof identity.email!=='string')fail();identities.push(identity.email);}
-  if(identities[0]!==settings.allowedEmail||identities[1]===settings.allowedEmail||!/^\S+@[^\s@]+\.[^\s@]+$/.test(identities[1]))fail();
   for(const path of sentinelPaths){const url=host+'/'+path.split('/').map(encodeURIComponent).join('/');const expected=await readFile(resolve(root,'.generated/bootstrap',path));
    const good=await owner.request.get(url,{maxRedirects:0});if(good.status()!==200||!Buffer.from(await good.body()).equals(expected))fail();
-   for(const context of [anonymous,other]){const r=await context.request.get(url,{maxRedirects:0});if(!recognizedAccessDenial({status:r.status(),headers:r.headers(),body:await r.body()},expected,url))fail();}
+   const denied=await anonymous.request.get(url,{maxRedirects:0});if(!recognizedAccessDenial({status:denied.status(),headers:denied.headers(),body:await denied.body()},expected,url,snapshot.authDomain))fail();
+   if(!await verifyOtherAccountDenial(other.request,url,snapshot.authDomain,expected))fail();
   }
  }
  }finally{await browser.close();}

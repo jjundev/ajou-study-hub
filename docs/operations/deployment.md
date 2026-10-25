@@ -40,11 +40,11 @@ Zero Trust 앱에서 Allow 정책을 하나만 두고 Include를 본인 이메�
 
 ## 인증별 실제 검증
 
-사용자가 직접 OTP를 입력해 서로 다른 브라우저 세션으로 본인과 다른 계정을 준비하고 Playwright storageState를 각각 `.local/auth/owner.json`, `.local/auth/other.json`에 저장합니다. OTP·쿠키·storageState를 채팅·로그·Git으로 보내지 않습니다. 다른 계정은 본인 세션을 재사용하면 안 됩니다.
+본인은 사용자가 직접 OTP를 입력한 정상 세션을 `.local/auth/owner.json`에 저장합니다. 다른 계정은 **같은 Zero Trust 팀에서 이미 독립적으로 인증된 사람의 세션**이 있어야 하며 이를 별도 `.local/auth/other.json`에 저장합니다. 예를 들어 그 계정이 기존의 다른 팀 앱에 정당하게 접근해 이미 발급받은 팀 세션을 사용할 수 있습니다. 기존에 이런 세션이 없으면 다른 계정 검증은 미완료로 남깁니다. 소유자 전용 대상 앱에서 차단된 이메일은 OTP를 받지 못하며, 화면의 “코드를 보냈다”는 안내는 인증 증거가 아닙니다. 임시 이메일 추가·정책 완화·새 앱 생성·세션 위조로 이 조건을 우회하지 않습니다. OTP·쿠키·storageState는 채팅·로그·Git으로 보내지 않고 본인 세션을 다른 계정에 재사용하지 않습니다.
 
-검증기는 각 호스트의 `/cdn-cgi/access/get-identity`에서 본인 이메일 일치와 다른 이메일임을 확인합니다. 다른 계정이 앱에서 차단되어 이 identity endpoint 자체를 읽을 수 없는 경우에도 성공으로 추정하지 않습니다. 그 경우 실제 환경에 맞는 안전한 identity 증명 경로를 먼저 검토해야 하며 증거는 미완료입니다.
+검증기는 계정의 읽기 API `/accounts/{id}/access/organizations`가 반환한 `auth_domain`을 확인하고 **`https://<팀>.cloudflareaccess.com/cdn-cgi/access/get-identity`**로만 identity를 조회합니다. Worker 호스트에 이 경로를 붙이지 않습니다. 팀 도메인·HTTPS·userinfo 없는 주소만 허용하고 리다이렉트를 따라가지 않습니다. 브라우저의 정상 쿠키 범위를 사용하며 API bearer나 Worker 쿠키를 명시적으로 다른 출처에 복사하지 않습니다. 응답의 계정 ID와 user_uuid, 본인/다른 이메일을 확인하고 service token은 거절합니다. 팀에 유효한 사용자 세션이 없거나 identity 응답을 확인할 수 없으면 증거는 미완료입니다.
 
-운영 호스트의 빈 catalog, HTML, 중첩 `.pack` HTML, PNG, PDF, 폰트 MIME sentinel 모두를 검사합니다. 본인은 정확한 원본 바이트/해시와 200을 받아야 합니다. 비로그인과 다른 계정 응답은 sentinel 바이트가 없어야 하며 Cloudflare Access 로그인 리다이렉트 또는 식별 가능한 Access 403을 보여야 합니다. 네트워크 오류·5xx·일반 401/404는 차단 성공이 아닙니다. 검증 전후 정책을 다시 조회해 중간 변경도 거절합니다.
+운영 호스트의 빈 catalog, HTML, 중첩 `.pack` HTML, PNG, PDF, 폰트 MIME sentinel 모두를 검사합니다. 본인은 정확한 원본 바이트/해시와 200을 받아야 합니다. 비로그인과 다른 계정 응답은 sentinel 바이트가 없어야 하며 Cloudflare Access 로그인 리다이렉트 또는 식별 가능한 Access 403을 보여야 합니다. 다른 계정은 최초 로그인 리다이렉트만으로 성공 처리하지 않습니다. 확인한 팀과 대상 앱의 정확한 두 출처 안에서만 최대 8회의 리다이렉트를 따라가며 최종 식별 가능한 Access 403을 요구합니다. 로그인 화면의 200, 세션 누락, 외부 출처 리다이렉트, 네트워크 오류·5xx·일반 401/404는 차단 성공이 아닙니다. 검증 전후 정책을 다시 조회해 중간 변경도 거절합니다.
 
 증거는 24시간만 유효합니다. 계정·Worker·앱 ID, 설정·정책 fingerprint, 호스트 목록이 달라지면 릴리스가 중단됩니다. 실패한 재검증이나 새 bootstrap 업로드는 이전 성공 증거를 무효화합니다. `.generated/verification-tests/` 아래 합성 프로젝트는 실제 증거를 만들지 않습니다.
 
@@ -55,3 +55,5 @@ Zero Trust 앱에서 Allow 정책을 하나만 두고 Include를 본인 이메�
 2026-10-25에 Cloudflare 공식 [Worker Access 안내](https://developers.cloudflare.com/workers/configuration/cloudflare-access/)와 [TypeScript SDK 앱 스키마](https://github.com/cloudflare/cloudflare-typescript/blob/main/src/resources/zero-trust/access/applications/applications.ts), [immutable Worker 스키마](https://github.com/cloudflare/cloudflare-typescript/blob/main/src/resources/workers/beta/workers/workers.ts), [구독 스키마](https://github.com/cloudflare/cloudflare-typescript/blob/main/src/resources/shared.ts)를 읽었습니다. 합성 fixture는 이 스키마의 비식별 최소 응답이며 실제 계정 GET fixture가 아닙니다.
 
 실제 계정·Free 플랜 응답·Access 앱/정책·페이지네이션·다른 계정 identity 증명·게시 후 sentinel 응답은 모두 실제 준비 이후 재확인이 필요합니다. 실제 AC-12/AC-13 통과를 로컬 테스트로 주장하지 않습니다.
+
+공식 추가 근거: [사용자 identity 조회](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/application-token/#user-identity), [OTP 차단 사용자 동작](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/#log-in-with-otp), [조직 auth_domain 조회](https://developers.cloudflare.com/api/resources/zero_trust/subresources/organizations/methods/list/). 2026-10-25 재확인했습니다.
