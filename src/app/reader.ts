@@ -1,9 +1,31 @@
 import type { Catalog } from '../content/model.js';
+import type { ReaderHostWindow, ReaderWindow } from '../compat/reader-bridge.js';
 
-export function mountReader(root: HTMLElement, catalog: Catalog, onNavigate: (documentId: string, anchor?: string) => void) {
+export type ReaderEntry = { entryId: string; state: unknown };
+export type ReaderChange = { state: unknown; previous?: { anchor?: string; search?: string; state: unknown } };
+export type ReaderMode = 'push' | 'replace' | 'sync' | 'native-sync' | 'state-push' | 'state-replace';
+
+export function mountReader(root: HTMLElement, catalog: Catalog,
+  onNavigate: (documentId: string, anchor?: string, search?: string, mode?: ReaderMode, change?: ReaderChange) => void) {
   let frame: HTMLIFrameElement | undefined;
-  let selected: string | undefined;
   let generation = 0;
+  let pending: string | undefined;
+  let requestedUrl: string | undefined;
+  let nativeDestination: { url: string; generation: number; topRoute: string } | undefined;
+  let active = true;
+  let inFlight = false;
+  let restoring: ReaderEntry | undefined;
+  let restoredEntry: string | undefined;
+  let sourceInstance: string | undefined;
+  let sourceSequence = 0;
+  function observeInstance(child: ReaderWindow) {
+    if (sourceInstance !== child.__studyHubReaderInstance) { sourceInstance = child.__studyHubReaderInstance; sourceSequence = 0; }
+  }
+  let disposed = false;
+  let approved: { instance: string; from: string; url: string; generation: number } | undefined;
+  const status = document.createElement('p');
+  status.hidden = true;
+  root.append(status);
   const path = (url: URL) => {
     try { return decodeURIComponent(url.pathname); }
     catch { return url.pathname; }
@@ -14,90 +36,173 @@ export function mountReader(root: HTMLElement, catalog: Catalog, onNavigate: (do
     try { return decodeURIComponent(url.hash.slice(1)) || undefined; }
     catch { return url.hash.slice(1) || undefined; }
   };
+  const host = {
+    canNavigate(source: Window, url: string) {
+      return active && !disposed && source === frame?.contentWindow && !!find(new URL(url));
+    },
+    consume(source: Window, instance: string, from: string, url: string, navigationType: string) {
+      if (!active || disposed || source !== frame?.contentWindow || navigationType !== 'replace' ||
+          !approved || approved.generation !== generation || approved.instance !== instance ||
+          approved.from !== from || approved.url !== url) return false;
+      approved = undefined;
+      return true;
+    },
+    allowNative(source: Window, instance: string, from: string, url: string) {
+      if (host.canNavigate(source, url) && instance === (source as ReaderWindow).__studyHubReaderInstance &&
+          from === source.location.href && (!pending || pending === from)) {
+        nativeDestination = {url,generation,topRoute:location.hash};
+      }
+    },
+  };
+  (window as ReaderHostWindow).__studyHubReader = host;
   function error() {
-    frame?.remove();
-    frame = undefined;
-    const alert = document.createElement('p');
-    alert.role = 'alert';
-    alert.textContent = '자료를 불러오지 못했습니다.';
-    root.replaceChildren(alert);
+    active = false;
+    pending = undefined;
+    approved = undefined;
+    status.hidden = false;
+    status.role = 'alert';
+    status.textContent = '자료를 불러오지 못했습니다.';
+    if (frame) frame.hidden = true;
   }
   function synchronize() {
-    if (!frame) return;
+    if (!frame || disposed || !active) return;
     try {
       const url = new URL(frame.contentWindow!.location.href);
-      if (url.href === 'about:blank') return;
+      if (url.href === 'about:blank' || pending && url.href !== pending) return;
       const doc = find(url);
       if (!doc || !frame.contentDocument?.querySelector('script[data-study-hub]')) { error(); return; }
-      selected = doc.id;
+      const child = frame.contentWindow as ReaderWindow;
+      observeInstance(child);
+      if ((child.__studyHubReaderHistory?.sequence ?? 0) > sourceSequence) return;
+      pending = undefined;
+      inFlight = false;
+      if (restoring && child.__studyHubReaderHistory) {
+        const entry = restoring; restoring = undefined; restoredEntry = entry.entryId;
+        child.__studyHubReaderHistory.restore(url.href, entry.state);
+      }
+      status.hidden = true;
+      frame.hidden = false;
       frame.title = doc.title;
-      onNavigate(doc.id, anchorOf(url));
+      const unowned = nativeDestination?.url === url.href && nativeDestination.generation === generation && nativeDestination.topRoute === location.hash ||
+        !child.navigation && url.href !== requestedUrl;
+      nativeDestination = undefined;
+      onNavigate(doc.id, anchorOf(url), url.search || undefined, unowned ? 'native-sync' : 'sync', {state:child.history.state});
     } catch { error(); }
   }
   function message(event: MessageEvent) {
-    if (!frame || event.origin !== location.origin || event.source !== frame.contentWindow) return;
+    if (!frame || disposed || !active || event.origin !== location.origin || event.source !== frame.contentWindow) return;
     const data = event.data;
     if (!data || data.type !== 'study-hub:navigate' || typeof data.documentId !== 'string' || typeof data.url !== 'string') return;
     try {
-      // documentId identifies the sender; url is the proposed destination.
       const current = new URL(frame.contentWindow!.location.href);
-      if (find(current)?.id !== data.documentId) return;
-      const url = new URL(data.url);
-      const doc = find(url);
-      if (!doc) return;
-      if (url.href === current.href) { selected = doc.id; frame.title = doc.title; }
-      onNavigate(doc.id, anchorOf(url));
+      const child = frame.contentWindow as ReaderWindow;
+      observeInstance(child);
+      if (find(current)?.id !== data.documentId || data.instance !== child.__studyHubReaderInstance ||
+          typeof data.instance !== 'string') return;
+      if (data.intent === 'history') {
+        const url = new URL(data.url), previous = new URL(data.previousUrl);
+        // Source pushes execute synchronously: the child may already be at the
+        // second hash when the first message arrives. Instance + ordered sequence
+        // + same document identity validate each committed state without dropping it.
+        if (data.sourceUrl !== url.href || find(url)?.id !== data.documentId || find(previous)?.id !== data.documentId ||
+            !Number.isSafeInteger(data.sequence) || data.sequence !== sourceSequence + 1 ||
+            data.sequence > (child.__studyHubReaderHistory?.sequence ?? 0) ||
+            !['push','replace'].includes(data.history) || pending && find(new URL(pending))?.id !== data.documentId) return;
+        sourceSequence = data.sequence;
+        requestedUrl = url.href;
+        if (pending) pending = url.href;
+        if (restoring) { if (frame.contentDocument?.readyState === 'complete') synchronize(); return; }
+        onNavigate(data.documentId, anchorOf(url), url.search || undefined,
+          data.history === 'push' ? 'state-push' : 'state-replace',
+          {state:data.state,previous:{anchor:anchorOf(previous),search:previous.search || undefined,state:data.previousState}});
+        return;
+      }
+      if (data.sourceUrl !== current.href || pending && pending !== current.href) return;
+      if (data.intent === 'sync') {
+        if (data.url === current.href) synchronize();
+      } else if (data.intent === 'navigate' && (data.history === undefined || data.history === 'push' || data.history === 'replace')) {
+        const url = new URL(data.url);
+        const doc = find(url);
+        if (doc) onNavigate(doc.id, anchorOf(url), url.search || undefined, data.history ?? 'push');
+      }
     } catch { /* Ignore malformed or inaccessible messages. */ }
+  }
+  function apply(url: URL) {
+    const child = frame!.contentWindow as ReaderWindow;
+    inFlight = true;
+    try {
+      approved = { instance: child.__studyHubReaderInstance ?? '', from: child.location.href, url: url.href, generation };
+    } catch { approved = undefined; }
+    child.location.replace(url.href);
+  }
+  function open(id: string, anchor?: string, search?: string, entry?: ReaderEntry) {
+    active = true;
+    const token = ++generation;
+    nativeDestination = undefined;
+    approved = undefined;
+    restoring = entry;
+    const doc = catalog.documents.find(d => d.id === id);
+    if (!doc) { error(); return; }
+    const url = new URL(doc.url, location.origin);
+    if (search) url.search = search;
+    if (anchor) url.hash = anchor;
+    requestedUrl = url.href;
+    try {
+      const current = frame && new URL(frame.contentWindow!.location.href);
+      const child = frame?.contentWindow as ReaderWindow | undefined;
+      if (child) { observeInstance(child); sourceSequence = child.__studyHubReaderHistory?.sequence ?? 0; }
+      if (current?.href === url.href && inFlight && pending !== url.href) {
+        pending = url.href;
+        apply(url); // Supersede an older already-applied navigation, even before it commits.
+        return;
+      }
+      if (current && current.pathname === url.pathname && current.search === url.search && !inFlight && entry && child?.__studyHubReaderHistory) {
+        pending = undefined; restoring = undefined;
+        if (restoredEntry !== entry.entryId || current.href !== url.href) {
+          restoredEntry = entry.entryId;
+          child.__studyHubReaderHistory.restore(url.href, entry.state);
+        }
+        status.hidden = true; frame!.hidden = false;
+        return;
+      }
+      if (current?.href === url.href && !inFlight) {
+        pending = undefined;
+        synchronize();
+        return;
+      }
+      if (current && current.pathname === url.pathname && current.search === url.search && !inFlight) {
+        pending = url.href;
+        apply(url);
+        return;
+      }
+    } catch { /* A native fallback can temporarily leave the same origin. */ }
+    pending = url.href;
+    status.hidden = false;
+    status.role = 'status';
+    status.textContent = '자료를 불러오는 중입니다…';
+    void fetch(url.href, { cache: 'no-store' }).then(async response => {
+      const text = await response.text();
+      if (token !== generation || disposed || !active) return;
+      if (!response.ok || !text.includes('data-study-hub')) { error(); return; }
+      if (!frame) {
+        frame = document.createElement('iframe');
+        frame.title = doc.title;
+        frame.style.cssText = 'width:100%;min-height:75vh;border:0';
+        frame.addEventListener('load', synchronize);
+        inFlight = true;
+        frame.src = url.href;
+        root.append(frame);
+      } else apply(url);
+    }).catch(() => { if (token === generation && !disposed && active) error(); });
   }
   window.addEventListener('message', message);
   return {
-    open(id: string, anchor?: string) {
-      const doc = catalog.documents.find(d => d.id === id);
-      if (!doc) { ++generation; selected = undefined; error(); return; }
-      const url = new URL(doc.url, location.origin);
-      if (anchor) url.hash = anchor;
-      if (frame && selected === id) {
-        try {
-          const current = new URL(frame.contentWindow!.location.href);
-          if (find(current)?.id === id) {
-            if (current.hash !== url.hash) {
-              // Parent history owns bridge-click anchors. Avoid an extra iframe entry.
-              frame.contentWindow!.history.replaceState(null, '', url.href);
-              frame.contentDocument?.getElementById(anchor ?? '')?.scrollIntoView();
-              if (!anchor) frame.contentWindow!.scrollTo(0, 0);
-            }
-            return;
-          }
-        } catch { /* Replace a frame whose current location is inaccessible. */ }
-      }
-      const token = ++generation;
-      selected = id;
-      frame?.remove();
-      frame = undefined;
-      const loading = document.createElement('p');
-      loading.role = 'status';
-      loading.textContent = '자료를 불러오는 중입니다…';
-      root.replaceChildren(loading);
-      const next = document.createElement('iframe');
-      next.title = doc.title;
-      next.style.cssText = 'width:100%;min-height:75vh;border:0';
-      next.addEventListener('load', () => {
-        if (token === generation && frame === next) synchronize();
-      });
-      // Verify status and the copied-document marker; Vite can return index.html for missing files.
-      void fetch(url.href, { cache: 'no-store' }).then(async response => {
-        if (token !== generation) return;
-        if (!response.ok) { error(); return; }
-        const text = await response.text();
-        if (token !== generation) return;
-        if (!text.includes('data-study-hub')) { error(); return; }
-        frame = next;
-        next.src = url.href;
-        root.replaceChildren(next);
-      }).catch(() => { if (token === generation) error(); });
-    },
+    open,
+    suspend() { active = false; ++generation; approved = undefined; restoring = undefined; },
     destroy() {
+      disposed = true;
       ++generation;
+      if ((window as ReaderHostWindow).__studyHubReader === host) delete (window as ReaderHostWindow).__studyHubReader;
       window.removeEventListener('message', message);
       frame?.remove();
       frame = undefined;

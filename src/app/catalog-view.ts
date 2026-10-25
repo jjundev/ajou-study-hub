@@ -37,6 +37,8 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog, onSelect: (doc
   const groups = element('div', undefined, 'material-groups');
   const results = element('p', undefined, 'result-count'); results.setAttribute('role', 'status');
   const reader = element('main', undefined, 'reader-panel'); reader.id = 'reader'; reader.tabIndex = -1;
+  // Selection metadata must not disconnect the live source document.
+  const selection = element('div'); reader.append(selection);
   body.append(searchLabel, search, hint, clear, element('h2', '과목', 'section-label'), nav, results, groups);
   sidebar.append(toggle, body); layout.append(sidebar, reader); shell.append(header, layout); root.replaceChildren(shell);
   search.addEventListener('input', () => update({ ...state, query: search.value }));
@@ -102,13 +104,13 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog, onSelect: (doc
   }
   function renderSelection() {
     const doc = catalog.documents.find(d => d.id === selected);
-    reader.replaceChildren();
+    selection.replaceChildren();
     if (doc) {
-      reader.append(element('p', catalog.courses.find(c => c.id === doc.courseId)?.name ?? '', 'reader-course'), element('h2', doc.title), element('p', '자료를 선택했습니다. 본문 보기는 다음 단계에서 연결됩니다.', 'reader-message'));
+      selection.append(element('p', catalog.courses.find(c => c.id === doc.courseId)?.name ?? '', 'reader-course'), element('h2', doc.title), element('p', '자료를 선택했습니다. 본문 보기는 다음 단계에서 연결됩니다.', 'reader-message'));
     } else {
       const introduction = element('div', undefined, 'reader-introduction');
       introduction.append(element('h2', '오늘 공부할 자료를 선택하세요'), element('p', '과목과 학습 묶음별로 정리된 자료를 한곳에서 찾아보세요. 제목이나 날짜를 검색해 바로 찾을 수 있습니다.'), element('p', '학습 기록은 현재 브라우저에 저장됩니다.', 'storage-note'));
-      reader.append(introduction);
+      selection.append(introduction);
     }
   }
   function render() {

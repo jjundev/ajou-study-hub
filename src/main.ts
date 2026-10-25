@@ -1,5 +1,5 @@
 import { mountCatalog } from './app/catalog-view.js';
-import { mountReader } from './app/reader.js';
+import { mountReader, type ReaderMode, type ReaderChange } from './app/reader.js';
 import {parseRoute,formatRoute,type Route} from './app/router.js';
 import type { Catalog } from './content/model.js';
 
@@ -26,42 +26,58 @@ async function load() {
     if (!response.ok) throw Error('Catalog request failed');
     const value: unknown = await response.json();
     if (!isCatalog(value)) throw Error('Invalid catalog');
+    loading.remove();
     const catalog = value;
-    let currentId: string | null = null;
-    let reader: ReturnType<typeof mountReader> | undefined;
-    const navigate = (route: Route, replace = false) => { const hash = formatRoute(route); if (location.hash !== hash) history[replace ? 'replaceState' : 'pushState'](null, '', hash); renderRoute(); };
-    const view = mountCatalog(root, catalog, id => { reader?.destroy(); reader = undefined; currentId = null; navigate({kind:'read',documentId:id}); }, state => navigate({kind:'catalog',...state}));
-    function renderRoute() {
-      const route = parseRoute(location.hash);
+    const view = mountCatalog(root, catalog, id => navigate({kind:'read',documentId:id}),
+      state => navigate({kind:'catalog',...state}));
+    const panel = root.querySelector<HTMLElement>('#reader')!;
+    const host = document.createElement('div');
+    const back = document.createElement('a'); back.href = '#/catalog'; back.textContent = '목록으로';
+    back.addEventListener('click', event => { event.preventDefault(); navigate({kind:'catalog'}); });
+    const holder = document.createElement('div'); host.append(back, holder); panel.append(host);
+    const reader = mountReader(holder, catalog, (documentId, anchor, search, mode, change) =>
+      navigate({kind:'read',documentId,anchor,search}, mode, change));
+    const entryId = () => history.state?.studyHub?.entryId ?? crypto.randomUUID();
+    function navigate(route: Route, mode: ReaderMode = 'push', change?: ReaderChange) {
+      // Traversal commits location before popstate/hashchange rendering. A late
+      // child sync must not replace that already-committed parent destination.
+      if (mode === 'sync' && formatRoute(parseRoute(location.hash)) !== formatRoute(route)) { renderRoute(); return; }
+      const applied = mode === 'sync' || mode === 'native-sync' || mode.startsWith('state-');
+      if (mode.startsWith('state-') && route.kind === 'read' && change?.previous &&
+          formatRoute(parseRoute(location.hash)) !== formatRoute({kind:'read',documentId:route.documentId,
+            anchor:change.previous.anchor,search:change.previous.search})) return;
+      if (mode === 'state-push' && route.kind === 'read' && change?.previous) {
+        const previous = change.previous;
+        history.replaceState({studyHub:{entryId:entryId(),documentId:route.documentId,state:previous.state}}, '',
+          formatRoute({kind:'read',documentId:route.documentId,anchor:previous.anchor,search:previous.search}));
+      }
+      const hash = formatRoute(route);
+      const push = mode === 'state-push' || mode === 'push' && location.hash !== hash;
+      const state = {studyHub:{entryId:push ? crypto.randomUUID() : entryId(),
+        ...(applied && route.kind === 'read' ? {documentId:route.documentId,state:change?.state} : {})}};
+      if (applied || push || mode === 'replace') history[push ? 'pushState' : 'replaceState'](state, '', hash);
+      if (applied) display(route);
+      else renderRoute();
+    }
+    function display(route: Route) {
+      host.hidden = route.kind === 'catalog';
       if (route.kind === 'catalog') {
-        reader?.destroy(); reader = undefined; currentId = null;
-        view.setBrowseState(route); view.setSelection(null); document.title = '아주 학습 자료실'; return;
+        view.setBrowseState(route); view.setSelection(null); document.title = '아주 학습 자료실';
+        return;
       }
       const id = route.kind === 'read' ? route.documentId : '';
-      if (id !== currentId || !reader) {
-        reader?.destroy(); view.setSelection(id); currentId = id;
-        const panel = root.querySelector<HTMLElement>('#reader')!;
-        const back = document.createElement('a'); back.href = '#/catalog'; back.textContent = '목록으로';
-        const holder = document.createElement('div'); panel.append(back, holder);
-        reader = mountReader(holder, catalog, (documentId, anchor) => {
-          // Native iframe navigation already adds a joint-session history entry.
-          let native = false;
-          try {
-            const actual = new URL(holder.querySelector('iframe')!.contentWindow!.location.href);
-            const target = new URL(catalog.documents.find(d => d.id === documentId)!.url, location.origin);
-            if (anchor) target.hash = anchor;
-            native = actual.href === target.href;
-          } catch {}
-          if (native && currentId !== documentId) {
-            currentId = documentId;
-            view.setSelection(documentId, true);
-          }
-          navigate({kind:'read',documentId,anchor}, native);
-        });
-      }
+      view.setSelection(id);
       const doc = catalog.documents.find(d => d.id === id);
       document.title = doc ? doc.title + ' · 아주 학습 자료실' : '자료 오류 · 아주 학습 자료실';
-      reader.open(id, route.kind === 'read' ? route.anchor : undefined);
+    }
+    function renderRoute() {
+      const route = parseRoute(location.hash);
+      display(route);
+      if (route.kind === 'catalog') { reader.suspend(); return; }
+      const id = route.kind === 'read' ? route.documentId : '';
+      const entry = history.state?.studyHub;
+      reader.open(id, route.kind === 'read' ? route.anchor : undefined, route.kind === 'read' ? route.search : undefined,
+        entry?.documentId === id ? {entryId:entry.entryId,state:entry.state} : undefined);
     }
     window.addEventListener('hashchange', renderRoute);
     window.addEventListener('popstate', renderRoute);
@@ -71,7 +87,7 @@ async function load() {
     const title = document.createElement('h1'); title.textContent = '자료 목록을 불러오지 못했습니다';
     const hint = document.createElement('p'); hint.textContent = '연결 상태를 확인하고 다시 시도해 주세요.';
     const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '다시 시도'; retry.addEventListener('click', load);
-    message.append(title, hint, retry); root.replaceChildren(message);
+    message.append(title, hint, retry); loading.remove(); root.append(message);
   }
 }
 void load();
