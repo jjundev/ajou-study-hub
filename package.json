@@ -12,6 +12,7 @@
     "ci:ledger": "tsx tools/ci/ledger-cli.ts",
     "ci:notify": "tsx tools/ci/notify.ts",
     "ci:notifiers": "tsx tools/ci/notifier-templates.ts",
+    "ci:prove-permissions": "tsx tools/ci/app-permissions.ts",
     "test": "vitest run",
     "fixtures:create": "tsx tools/create-fixture.ts",
     "content:build": "tsx tools/cli.ts content:build",
