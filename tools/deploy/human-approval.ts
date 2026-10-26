@@ -6,7 +6,7 @@ import { verificationProject } from '../verification-project.js';
 import { assertCurrentBundle } from '../runtime-server.js';
 import { inventory } from './bootstrap.js';
 import { writeReport, type BuildReport } from '../content/report.js';
-import { validateSettings, settingsFingerprint, readIndependentIdentity, readPolicyDecision, recognizedAccessDenial, verifyPolicyBoundNonDisclosure, type DeploymentSettings } from './access.js';
+import { validateSettings, settingsFingerprint, readIndependentIdentity, readPolicyDecision, verifyPolicyBoundNonDisclosure, type DeploymentSettings } from './access.js';
 import { readAccessInspection, exactKeys, digest, canonical, sha256 } from './access-policy.js';
 export type ProbeRow={path:string;sha256:string;kind:'catalog'|'html'|'nested-html'|'image'|'pdf'|'font';ownerExact:boolean;anonymousBlocked:boolean;otherBlocked:boolean};
 export type HumanEvidence={version:1;checkedAt:string;settingsFingerprint:string;protectionFingerprint:string;ownerIdentityHash:string;otherIdentityHash:string;policyChecksHash:string;rows:ProbeRow[];absentKinds:string[]};
@@ -42,6 +42,16 @@ function representatives(manifest:BuildReport){
  for(const kind of kinds){const path=paths.find(matches[kind]);if(path)selected.push({path,kind});else if(kind==='catalog'||kind==='html')fail();else absentKinds.push(kind);}
  return {selected,absentKinds};
 }
+/** Production proof requires Access-specific terminal responses. A CDN cf-ray plus
+ * generic origin "Access denied" is insufficient. Keep the legacy manual helper
+ * unchanged, but filter every 403 before its trusted-flow and no-leak checks. */
+async function productionNonDisclosure(request:Parameters<typeof verifyPolicyBoundNonDisclosure>[0],url:string,authDomain:string,expected:Uint8Array):Promise<boolean>{
+ return verifyPolicyBoundNonDisclosure({get:async(target,options)=>{
+  const response=await request.get(target,options);
+  if(response.status()===403&&!/\bCloudflare Access\b/i.test(Buffer.from(await response.body()).toString('utf8')))fail();
+  return response;
+ }},url,authDomain,expected);
+}
 /** Local human sessions are consumed only here; no credential or identity body is persisted. */
 export async function verifyProduction(settings:DeploymentSettings,manifest:BuildReport,ownerStatePath:string,otherStatePath:string):Promise<HumanEvidence>{
  try{
@@ -68,8 +78,8 @@ export async function verifyProduction(settings:DeploymentSettings,manifest:Buil
     for(const host of snapshot.hosts){
      const url=host+'/'+path.split('/').map(encodeURIComponent).join('/');
      const good=await owner.request.get(url,{maxRedirects:0});if(good.status()!==200||!Buffer.from(await good.body()).equals(expected))fail();
-     const denied=await anonymous.request.get(url,{maxRedirects:0});if(!recognizedAccessDenial({status:denied.status(),headers:denied.headers(),body:await denied.body()},expected,url,snapshot.authDomain))fail();
-     if(!await verifyPolicyBoundNonDisclosure(other.request,url,snapshot.authDomain,expected))fail();
+     if(!await productionNonDisclosure(anonymous.request,url,snapshot.authDomain,expected))fail();
+     if(!await productionNonDisclosure(other.request,url,snapshot.authDomain,expected))fail();
     }
     rows.push({path,sha256:sha,kind,ownerExact:true,anonymousBlocked:true,otherBlocked:true});
    }
