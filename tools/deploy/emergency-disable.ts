@@ -22,7 +22,7 @@ function client(request:typeof fetch,token:string){
  async function api(path:string,method='GET',body?:unknown){
   const {response,text}=await read('https://api.cloudflare.com/client/v4'+path,{method,headers:{Authorization:'Bearer '+token,...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});
   if(!response.ok)fail();const envelope:unknown=JSON.parse(text);
-  if(!isRecord(envelope)||envelope.success!==true||!Array.isArray(envelope.errors)||envelope.errors.length||!Object.hasOwn(envelope,'result'))fail();
+  if(!isRecord(envelope)||envelope.success!==true||!Object.hasOwn(envelope,'errors')||envelope.errors!==null&&(!Array.isArray(envelope.errors)||envelope.errors.length)||!Object.hasOwn(envelope,'result'))fail();
   return envelope;
  }
  return {api,async source(path:string){

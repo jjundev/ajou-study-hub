@@ -54,6 +54,35 @@ async function fixture(change:Record<string,unknown>={}){
  return {...s,baseline,readReceipt:async()=>JSON.parse(await readFile(join(isolated.root,'.reports/recovery-target.json'),'utf8'))};
 }
 afterEach(async()=>{const root=isolated.root;isolated.root='';if(root)await rm(root,{recursive:true,force:true});});
+function envelopes(request:typeof fetch,change:(value:Record<string,unknown>)=>void):typeof fetch{
+ return async(input,init)=>{
+  const response=await request(input,init),path=new URL(String(input)).pathname;
+  if(!path.endsWith('/workers/workers')&&!path.endsWith('/workers/workers/'+id)&&!path.includes('/scripts/'+name+'/'))return response;
+  const value=await response.json() as Record<string,unknown>;change(value);
+  return new Response(JSON.stringify(value),{status:response.status,headers:response.headers});
+ };
+}
+it('accepts observed null errors on beta lists and successful recovery create/update responses',async()=>{
+ const s=await fixture();
+ await runRecoveryOperator(['--create-empty-rehearsal'],env,envelopes(s.request,value=>{value.errors=null;}));
+ expect(await s.readReceipt()).toMatchObject({phase:'verified',disabledConfirmed:true,restoredConfirmed:true});
+});
+it.each(['missing','undefined','string','number','object','nonempty','unsuccessful','http'] as const)('rejects malformed recovery envelope %s before writes',async kind=>{
+ const s=await fixture();
+ const malformed=envelopes(s.request,value=>{
+  if(kind==='missing')delete value.errors;
+  else if(kind==='undefined')value.errors=undefined;
+  else if(kind==='unsuccessful'){value.errors=null;value.success=false;}
+  else if(kind==='http')value.errors=null;
+  else value.errors={string:'',number:0,object:{},nonempty:[{code:1000}]}[kind];
+ });
+ const request:typeof fetch=async(input,init)=>{
+  const response=await malformed(input,init);
+  return kind==='http'&&new URL(String(input)).pathname.endsWith('/workers/workers')?new Response(await response.text(),{status:500}):response;
+ };
+ await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,request)).rejects.toThrow('Recovery operation remains unverified');
+ expect(s.writes).toEqual([]);
+});
 it('exclusively creates exact empty module, preserves previews false and records only recovery-specific success',async()=>{
  const s=await fixture();await runRecoveryOperator(['--create-empty-rehearsal'],env,s.request);
  expect(s.writes.map(w=>[w.method,w.path])).toEqual([['POST',`/accounts/${account}/workers/workers`],['PUT',`/accounts/${account}/workers/scripts/${name}`],...Array.from({length:3},()=>['POST',`/accounts/${account}/workers/scripts/${name}/subdomain`])]);

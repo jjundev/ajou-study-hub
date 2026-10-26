@@ -65,7 +65,7 @@ export async function runRecoveryOperator(args:string[],env:NodeJS.ProcessEnv,re
   const api=async(path:string,method='GET',body?:unknown)=>{
    const multipart=body instanceof FormData;
    const response=await request('https://api.cloudflare.com/client/v4'+path,{method,headers:{Authorization:'Bearer '+token,...(body===undefined||multipart?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:multipart?body:JSON.stringify(body)})});
-   if(!response.ok)fail();const value:unknown=await response.json();if(!isRecord(value)||value.success!==true||!Array.isArray(value.errors)||value.errors.length||!Object.hasOwn(value,'result'))fail();return value;
+   if(!response.ok)fail();const value:unknown=await response.json();if(!isRecord(value)||value.success!==true||!Object.hasOwn(value,'errors')||value.errors!==null&&(!Array.isArray(value.errors)||value.errors.length)||!Object.hasOwn(value,'result'))fail();return value;
   };
   const verifyOwned=async(target:RecoveryTarget,enabled:boolean,withSource:boolean)=>{
    const workers=await readCloudflareList(api,c.base+'/workers/workers'),matching=workers.filter(w=>w.name===name);

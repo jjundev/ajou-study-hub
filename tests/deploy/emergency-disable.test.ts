@@ -25,10 +25,18 @@ function server(change:Record<string,unknown>={},name='ajou-study-hub'){
   else if(url.pathname.endsWith('/scripts/'+name+'/settings'))result={bindings:[],...change.settings as object};
   else if(url.pathname.endsWith('/scripts/'+name))return new Response(String(change.source??'export default {fetch(){return new Response("recovery-test");}};'),{headers:{'content-type':String(change.sourceType??'application/javascript'),'content-disposition':String(change.sourceName??'attachment; filename="index.js"')}});
   else throw Error('Unexpected test route');
-  return new Response(JSON.stringify({success:true,errors:[],result,result_info:{page:1,total_pages:1,count:Array.isArray(result)?result.length:undefined}}));
+  return new Response(JSON.stringify({success:true,errors:Object.hasOwn(change,'errors')?change.errors:[],result,result_info:{page:1,total_pages:1,count:Array.isArray(result)?result.length:undefined}}));
  };
  return {request,writes,probes,calls};
 }
+it('accepts null errors throughout dedicated empty recovery rehearsal',async()=>{
+ const s=server({errors:null},'ajou-study-hub-recovery-test');
+ await expect(rehearseRecovery({accountId,workerId,workerName:'ajou-study-hub-recovery-test',productionUrl:'https://ajou-study-hub-recovery-test.example.workers.dev'},s.request,'test-token')).resolves.toEqual({disabledConfirmed:true,restoredConfirmed:true});
+ expect(s.writes.map(w=>w.body)).toEqual([{enabled:false,previews_enabled:false},{enabled:true,previews_enabled:false}]);
+});
+it.each([undefined,'',0,{},[{code:1000}]])('rejects missing or malformed errors before disabling %j',async errors=>{
+ const s=server({errors});await expect(disableEndpoint(settings,workerId,s.request,'test-token')).rejects.toThrow();expect(s.writes).toEqual([]);
+});
 it('recovery_targets_only_one_worker and sends no API credentials to public probes',async()=>{
  const s=server();await disableEndpoint(settings,workerId,s.request,'test-token');
  expect(s.writes).toEqual([{path:'/accounts/'+accountId+'/workers/scripts/ajou-study-hub/subdomain',body:{enabled:false,previews_enabled:false}}]);
