@@ -8,6 +8,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "ci:sources": "tsx tools/ci/sources-cli.ts",
+    "ci:ledger": "tsx tools/ci/ledger-cli.ts",
     "ci:notify": "tsx tools/ci/notify.ts",
     "ci:notifiers": "tsx tools/ci/notifier-templates.ts",
     "test": "vitest run",
