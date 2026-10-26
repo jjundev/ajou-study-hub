@@ -1,0 +1,46 @@
+name: Notify study hub
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+permissions: {}
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create dispatch token
+        id: dispatch-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2, verified official action.yml
+        with:
+          app-id: ${{ secrets.STUDY_HUB_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.STUDY_HUB_DISPATCH_PRIVATE_KEY }}
+          owner: jjundev
+          repositories: ajou-study-hub
+          permission-actions: write
+      - name: Dispatch fixed update
+        env:
+          GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          try {
+            if (!process.env.GH_TOKEN) throw new Error();
+            const response = await fetch('https://api.github.com/repos/jjundev/ajou-study-hub/actions/workflows/study-hub-update.yml/dispatches', {
+              method: 'POST',
+              redirect: 'error',
+              signal: AbortSignal.timeout(30000),
+              headers: {
+                Authorization: `Bearer ${process.env.GH_TOKEN}`,
+                Accept: 'application/vnd.github+json',
+                'Content-Type': 'application/json',
+                'X-GitHub-Api-Version': '2022-11-28'
+              },
+              body: JSON.stringify({"ref":"main","inputs":{"source_repository":"__SOURCE_REPOSITORY__"}})
+            });
+            if (response.status !== 204 || response.redirected) throw new Error();
+          } catch {
+            console.error('Study hub dispatch failed.');
+            process.exitCode = 1;
+          }
+          NODE

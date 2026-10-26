@@ -8,6 +8,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "ci:sources": "tsx tools/ci/sources-cli.ts",
+    "ci:notify": "tsx tools/ci/notify.ts",
+    "ci:notifiers": "tsx tools/ci/notifier-templates.ts",
     "test": "vitest run",
     "fixtures:create": "tsx tools/create-fixture.ts",
     "content:build": "tsx tools/cli.ts content:build",
@@ -34,7 +36,8 @@
     "typescript": "7.0.2",
     "vite": "8.3.5",
     "vitest": "5.0.5",
-    "wrangler": "4.152.0"
+    "wrangler": "4.152.0",
+    "yaml": "2.9.1"
   },
   "overrides": {
     "undici": "7.30.1"
