@@ -6,10 +6,11 @@ import { chromium } from '@playwright/test';
 import { verificationProject } from '../verification-project.js';
 import { writeReport, type BuildReport } from '../content/report.js';
 import { inventory } from './bootstrap.js';
+import { readCloudflareList } from './cloudflare-list.js';
 import { assertReleaseAllowed, sentinelPaths } from './guard.js';
 export type DeploymentSettings={accountId:string;workerName:string;allowedEmail:string;accessAppId:string;productionUrl:string;previewUrls:string[]};
-export type AccessSnapshot={accountId:string;workerName:string;accessAppId:string;allowedEmails:string[];workerWide:boolean;hasBypass:boolean;hosts:string[];freePlan:boolean;fingerprint:string;authDomain:string};
-export type ProtectionEvidence={accountId:string;workerName:string;accessAppId:string;checkedAt:string;settingsFingerprint:string;policyFingerprint:string;hosts:string[];anonymousBlocked:boolean;otherAccountBlocked:boolean;ownerAllowed:boolean;sentinelHashes:Record<string,string>};
+export type AccessSnapshot={accountId:string;workerName:string;accessAppId:string;allowedEmails:string[];workerWide:boolean;hasBypass:boolean;hosts:string[];freePlan:boolean;fingerprint:string;authDomain:string;otpProviderId:string};
+export type ProtectionEvidence={version:2;method:'independent-identity-policy-and-nondisclosure';ownerIdentityHash:string;otherIdentityHash:string;policyChecksHash:string;accountId:string;workerName:string;accessAppId:string;checkedAt:string;settingsFingerprint:string;policyFingerprint:string;hosts:string[];anonymousBlocked:boolean;otherAccountBlocked:boolean;ownerAllowed:boolean;sentinelHashes:Record<string,string>};
 type Obj=Record<string,any>;
 const object=(v:unknown):v is Obj=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const hash=(v:string|Uint8Array)=>createHash('sha256').update(v).digest('hex');
@@ -28,8 +29,14 @@ function teamOrigin(authDomain:unknown):string{
  return 'https://'+authDomain;
 }
 export function assertFreeSubscriptions(value:unknown):asserts value is Obj[]{
- if(!Array.isArray(value)||!value.length||!value.every(s=>object(s)&&s.state==='Provisioned'&&s.price===0&&object(s.rate_plan)&&typeof s.rate_plan.id==='string'&&['Workers Free','Zero Trust Free'].includes(s.rate_plan.public_name)))fail();
- const plans=new Set(value.map(s=>s.rate_plan.public_name));if(!plans.has('Workers Free')||!plans.has('Zero Trust Free'))fail();
+ // Workers Free is the documented default, not a separate subscription entry.
+ // A complete account inventory must contain only the observed non-trial Teams
+ // Free plan. Unknown/paid plans (even with a zero current price) fail closed.
+ if(!Array.isArray(value)||value.length!==1)fail();
+ const s=value[0];
+ if(!object(s)||s.state!=='Paid'||s.price!==0||s.currency!=='USD'||s.trial!==null||!object(s.rate_plan))fail();
+ const plan=s.rate_plan;
+ if(plan.id!=='teams_free'||plan.public_name!=='Teams Free Base'||plan.currency!=='USD'||plan.scope!=='account'||plan.externally_managed!==false||plan.is_contract!==false)fail();
 }
 /** Strict subset of official cloudflare-typescript SelfHostedApplication/Policy/Worker.
  * Unknown policy rules and all overlapping hostname/path/preview apps fail closed. */
@@ -39,14 +46,14 @@ export function normalizeAccess(settings:DeploymentSettings,data:AccessReadData)
  if(!object(organization))fail();teamOrigin(organization.auth_domain);
  if(!object(worker)||worker.name!==settings.workerName||typeof worker.id!=='string'||!worker.id||worker.id===worker.name)fail();
  if(!Array.isArray(apps)||!Array.isArray(idps)||!Array.isArray(hosts)||!Array.isArray(subscriptions)||!subscriptions.length)fail();
- // Only explicitly provisioned, zero-price subscriptions whose plan explicitly says Free.
+ // Only the known zero-price, non-trial Free account subscription is accepted.
  // Empty lists, trials, missing billing fields and unrecognised plans cannot establish Free.
  assertFreeSubscriptions(subscriptions);
  const expected=[settings.productionUrl,...settings.previewUrls].sort();
  if(stable([...hosts].sort())!==stable(expected)||new Set(hosts).size!==hosts.length)fail();
  const app=apps.find(a=>a.id===settings.accessAppId);
  if(!app||app.type!=='self_hosted'||![false,undefined].includes(app.options_preflight_bypass)||!Array.isArray(app.destinations)||app.destinations.length!==1||app.destinations[0].type!=='worker'||app.destinations[0].worker_id!==worker.id||!Array.isArray(app.destinations[0].overrides??[])||(app.destinations[0].overrides??[]).length||app.domain||!Array.isArray(app.self_hosted_domains??[])||(app.self_hosted_domains??[]).length)fail();
- if(!Array.isArray(app.allowed_idps)||app.allowed_idps.length!==1||!idps.some(i=>i.id===app.allowed_idps[0]&&i.type==='onetimepin'))fail();
+ if(!Array.isArray(app.allowed_idps)||app.allowed_idps.length!==1||typeof app.allowed_idps[0]!=='string'||!app.allowed_idps[0]||!idps.some(i=>i.id===app.allowed_idps[0]&&i.type==='onetimepin'))fail();
  const list=policies[app.id];
  if(!Array.isArray(list)||list.length!==1)fail();
  const p=list[0]!;
@@ -61,7 +68,7 @@ export function normalizeAccess(settings:DeploymentSettings,data:AccessReadData)
   for(const d of destinations)if(!object(d)||!['public','private','via_mcp_server_portal','worker','preview_worker','all_workers','all_preview_workers'].includes(d.type)||(['worker','preview_worker'].includes(d.type)&&d.worker_id===worker.id))fail();
  }
  const fingerprint=hash(stable({worker,apps,policies,idps,hosts:expected,subscriptions,organization}));
- return {accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,allowedEmails:[settings.allowedEmail],workerWide:true,hasBypass:false,hosts:expected,freePlan:true,fingerprint,authDomain:organization.auth_domain};
+ return {accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,allowedEmails:[settings.allowedEmail],workerWide:true,hasBypass:false,hosts:expected,freePlan:true,fingerprint,authDomain:organization.auth_domain,otpProviderId:app.allowed_idps[0]};
 }
 export type ReadOptions={fetch?:typeof fetch;token?:string};
 /** GET-only API; no auth bodies or Cloudflare error text escape this boundary. */
@@ -70,7 +77,7 @@ export async function readAccessSnapshot(settings:DeploymentSettings,options:Rea
  validateSettings(settings);const token=options.token??process.env.CLOUDFLARE_API_TOKEN;if(!token)fail();const request=options.fetch??fetch;
  const base=`/accounts/${settings.accountId}`;
  async function get(path:string){const r=await request('https://api.cloudflare.com/client/v4'+path,{headers:{Authorization:`Bearer ${token}`},redirect:'error'});if(!r.ok)fail();const data:unknown=await r.json();if(!object(data)||data.success!==true||!('result'in data)||(Array.isArray(data.errors)&&data.errors.length))fail();return data;}
- async function list(path:string,paginated=true){let out:Obj[]=[];for(let page=1;page<=100;page++){const r=await get(path+(path.includes('?')?'&':'?')+`page=${page}&per_page=100`);if(!Array.isArray(r.result)||!r.result.every(object))fail();out.push(...r.result);if(!paginated){if(r.result_info&&(r.result_info.total_pages>1||r.result_info.cursor||r.result_info.cursors?.after))fail();return out;}const info=r.result_info;if(!object(info)||info.page!==page||!Number.isInteger(info.total_pages)||info.total_pages<0||info.total_pages>100||info.cursor||info.cursors?.after)fail();if(page>=info.total_pages)return out;}return fail();}
+ const list=(path:string,mode:'paged'|'single'|'single-complete'='paged')=>readCloudflareList(get,path,mode);
  const workers=await list(base+'/workers/workers');const selected=workers.filter(w=>w.name===settings.workerName);if(selected.length!==1)fail();
  const worker=(await get(base+'/workers/workers/'+encodeURIComponent(selected[0]!.id))).result;if(!object(worker)||worker.id!==selected[0]!.id||worker.name!==settings.workerName)fail();
  const sub=(await get(base+'/workers/scripts/'+settings.workerName+'/subdomain')).result;
@@ -82,10 +89,10 @@ export async function readAccessSnapshot(settings:DeploymentSettings,options:Rea
  // Zone route inventory: reject all target script routes; worker-wide scope still protects
  // them, but accepting an unprobed address would make evidence incomplete.
  const zones=await list('/zones?account.id='+settings.accountId);
- for(const zone of zones){if(typeof zone.id!=='string')fail();const routes=await list('/zones/'+zone.id+'/workers/routes',false);if(routes.some(r=>r.script===settings.workerName))fail();}
+ for(const zone of zones){if(typeof zone.id!=='string')fail();const routes=await list('/zones/'+zone.id+'/workers/routes','single');if(routes.some(r=>r.script===settings.workerName))fail();}
  const apps=await list(base+'/access/apps');const policies:Record<string,Obj[]>={};
  for(const app of apps){if(typeof app.id!=='string')fail();policies[app.id]=await list(base+'/access/apps/'+encodeURIComponent(app.id)+'/policies');}
- const idps=await list(base+'/access/identity_providers',false),subscriptions=await list(base+'/subscriptions',false);
+ const idps=await list(base+'/access/identity_providers','single'),subscriptions=await list(base+'/subscriptions','single-complete');
  const organization=(await get(base+'/access/organizations')).result;
  return normalizeAccess(settings,{worker,apps,policies,idps,subscriptions,organization,hosts:[`https://${settings.workerName}.${accountSub.subdomain}.workers.dev`]});
  }catch{throw Error('Cloudflare Access read failed; protection remains unverified');}
@@ -95,13 +102,59 @@ type ProbeResponse={status():number;headers():Record<string,string>;body():Promi
 type ProbeRequest={get(url:string,options:{maxRedirects:number}):Promise<ProbeResponse>};
 /** Browser cookie scoping supplies the existing team session. No explicit cookie/token
  * header is copied from a Worker or a caller-provided URL to the identity service. */
-export async function readVerifiedIdentity(request:ProbeRequest,authDomain:string,accountId:string):Promise<string>{
+export type IndependentIdentity={email:string;userId:string};
+export async function readIndependentIdentity(request:ProbeRequest,authDomain:string,accountId:string,otpProviderId?:string):Promise<IndependentIdentity>{
  try{
  const response=await request.get(teamOrigin(authDomain)+'/cdn-cgi/access/get-identity',{maxRedirects:0});
  if(response.status()!==200)fail();const identity=await response.json();
- if(!object(identity)||identity.account_id!==accountId||typeof identity.user_uuid!=='string'||!identity.user_uuid||typeof identity.email!=='string'||!/^\S+@[^\s@]+\.[^\s@]+$/.test(identity.email)||identity.service_token_status!==false||identity.service_token_id)fail();
- return identity.email;
+ if(!object(identity)||identity.account_id!==accountId||typeof identity.user_uuid!=='string'||!identity.user_uuid||typeof identity.email!=='string'||!/^\S+@[^\s@]+\.[^\s@]+$/.test(identity.email)||identity.service_token_id)fail();
+ // Some real OTP user responses omit service_token_status. Only a provider ID
+ // confirmed by the live protected application's OTP configuration can substitute
+ // for that absent field. Explicit true/null/string values still fail closed.
+ if(otpProviderId!==undefined&&(!/^[a-zA-Z0-9_-]{1,128}$/.test(otpProviderId)||!object(identity.idp)||identity.idp.id!==otpProviderId||identity.idp.type!=='onetimepin'))fail();
+ if(identity.service_token_status!==false&&(Object.hasOwn(identity,'service_token_status')||otpProviderId===undefined))fail();
+ return {email:identity.email,userId:identity.user_uuid};
  }catch{throw Error('Independent Access identity could not be verified');}
+}
+/** Compatibility wrapper; the full verifier also binds the independent user UUID. */
+export async function readVerifiedIdentity(request:ProbeRequest,authDomain:string,accountId:string,otpProviderId?:string):Promise<string>{
+ return (await readIndependentIdentity(request,authDomain,accountId,otpProviderId)).email;
+}
+/** Live policy evaluation is supplemental to independently authenticated identity
+ * and actual edge non-disclosure, never a substitute for either. */
+export async function readPolicyDecision(settings:DeploymentSettings,identity:IndependentIdentity,expected:'success'|'fail',options:ReadOptions={}):Promise<string>{
+ try{
+ validateSettings(settings);const token=options.token??process.env.CLOUDFLARE_API_TOKEN;if(!token)fail();
+ const url=new URL('https://api.cloudflare.com/client/v4/accounts/'+settings.accountId+'/access/apps/'+settings.accessAppId+'/user_policy_checks');
+ url.searchParams.set('user_id',identity.userId);
+ const response=await (options.fetch??fetch)(url.href,{headers:{Authorization:'Bearer '+token},redirect:'error'});
+ if(!response.ok)fail();const value=await response.json();
+ if(!object(value)||value.success!==true||(value.errors!==undefined&&(!Array.isArray(value.errors)||value.errors.length))||!object(value.result))fail();
+ const {app_state:app,user_identity:user}=value.result;
+ if(!object(app)||app.app_uid!==settings.accessAppId||app.status!==expected||!Array.isArray(app.policies)||app.policies.length!==1||app.policies[0]?.decision!=='allow'||app.policies[0]?.status!==expected)fail();
+ if(!object(user)||user.account_id!==settings.accountId||user.user_uuid!==identity.userId||user.email!==identity.email)fail();
+ return hash(stable({accountId:settings.accountId,appId:settings.accessAppId,userId:identity.userId,email:identity.email,status:expected,policies:app.policies.map((p:Obj)=>({decision:p.decision,status:p.status}))}));
+ }catch{throw Error('Independent Access policy decision could not be verified');}
+}
+/** Used only after matching live policy denial to this independent identity.
+ * A target login redirect alone is insufficient: finish the trusted redirect chain
+ * and inspect the actual terminal login/denial response for sentinel leakage. */
+export async function verifyPolicyBoundNonDisclosure(request:ProbeRequest,target:string,authDomain:string,expected:Uint8Array):Promise<boolean>{
+ try{
+ const trustedTeam=teamOrigin(authDomain),targetUrl=new URL(target),targetOrigin=targetUrl.origin;let current=target;
+ if(targetUrl.protocol!=='https:'||targetUrl.username||targetUrl.password||targetUrl.port)return false;
+ for(let step=0;step<8;step++){
+  const r=await request.get(current,{maxRedirects:0}),body=Buffer.from(await r.body());
+  if(body.includes(Buffer.from(expected)))return false;
+  if(r.status()===403)return recognizedAccessDenial({status:r.status(),headers:r.headers(),body},expected,current);
+  if(r.status()===200){const url=new URL(current),text=body.toString('utf8');return url.origin===trustedTeam&&url.pathname==='/cdn-cgi/access/login/'+targetUrl.hostname&&!!r.headers()['cf-ray']&&/Cloudflare Access/i.test(text)&&/Send login code/i.test(text)&&/type=["']email["']/i.test(text);}
+  if(![302,303,307,308].includes(r.status())||!r.headers().location)return false;
+  let next:URL;try{next=new URL(r.headers().location!,current);}catch{return false;}
+  if(next.protocol!=='https:'||next.username||next.password||![trustedTeam,targetOrigin].includes(next.origin))return false;
+  current=next.href;
+ }
+ return false;
+ }catch{return false;}
 }
 /** An independently verified team session must actually finish the target authorization
  * flow. Its initial anonymous-style login redirect is not evidence of a policy denial. */
@@ -139,21 +192,27 @@ export async function verifyProtection(settings?:DeploymentSettings,options:Veri
  const outputs=await inventory(resolve(root,'.generated/bootstrap'));if(stable(outputs)!==stable(manifest.outputs)||hash(outputs.map(f=>`${f.path}\0${f.sha256}\n`).join(''))!==manifest.bundleHash)fail();
  const sentinelHashes:Record<string,string>={};for(const path of sentinelPaths){const f=outputs.find(f=>f.path===path);if(!f)fail();sentinelHashes[path]=f.sha256;}
  // Separate browser contexts; state never leaves ignored local storage and is never logged.
+ let ownerIdentityHash='',otherIdentityHash='',policyChecksHash='';
  const browser=await chromium.launch();try{
  const owner=await browser.newContext({storageState:resolve(root,'.local/auth/owner.json')}),other=await browser.newContext({storageState:resolve(root,'.local/auth/other.json')}),anonymous=await browser.newContext();
- const ownerEmail=await readVerifiedIdentity(owner.request,snapshot.authDomain,settings.accountId),otherEmail=await readVerifiedIdentity(other.request,snapshot.authDomain,settings.accountId);
- if(ownerEmail!==settings.allowedEmail||otherEmail===settings.allowedEmail)fail();
+ const ownerIdentity=await readIndependentIdentity(owner.request,snapshot.authDomain,settings.accountId,snapshot.otpProviderId),otherIdentity=await readIndependentIdentity(other.request,snapshot.authDomain,settings.accountId,snapshot.otpProviderId);
+ if(ownerIdentity.email!==settings.allowedEmail||otherIdentity.email===settings.allowedEmail||ownerIdentity.userId===otherIdentity.userId)fail();
+ const confirmedSettings=settings;
+ const policyChecks=async()=>hash(stable([await readPolicyDecision(confirmedSettings,ownerIdentity,'success',options),await readPolicyDecision(confirmedSettings,otherIdentity,'fail',options)]));
+ ownerIdentityHash=hash(stable(ownerIdentity));otherIdentityHash=hash(stable(otherIdentity));policyChecksHash=await policyChecks();
  for(const host of snapshot.hosts){
   for(const path of sentinelPaths){const url=host+'/'+path.split('/').map(encodeURIComponent).join('/');const expected=await readFile(resolve(root,'.generated/bootstrap',path));
    const good=await owner.request.get(url,{maxRedirects:0});if(good.status()!==200||!Buffer.from(await good.body()).equals(expected))fail();
    const denied=await anonymous.request.get(url,{maxRedirects:0});if(!recognizedAccessDenial({status:denied.status(),headers:denied.headers(),body:await denied.body()},expected,url,snapshot.authDomain))fail();
-   if(!await verifyOtherAccountDenial(other.request,url,snapshot.authDomain,expected))fail();
+   if(!await verifyPolicyBoundNonDisclosure(other.request,url,snapshot.authDomain,expected))fail();
   }
  }
+ const finalOwner=await readIndependentIdentity(owner.request,snapshot.authDomain,settings.accountId,snapshot.otpProviderId),finalOther=await readIndependentIdentity(other.request,snapshot.authDomain,settings.accountId,snapshot.otpProviderId);
+ if(stable(finalOwner)!==stable(ownerIdentity)||stable(finalOther)!==stable(otherIdentity)||await policyChecks()!==policyChecksHash)fail();
  }finally{await browser.close();}
  // Re-read after probes: a concurrent policy/hostname/plan change invalidates this run.
  const current=await readAccessSnapshot(settings,options);if(current.fingerprint!==snapshot.fingerprint)fail();
- const evidence:ProtectionEvidence={accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,checkedAt:new Date().toISOString(),settingsFingerprint:settingsFingerprint(settings),policyFingerprint:snapshot.fingerprint,hosts:snapshot.hosts,anonymousBlocked:true,otherAccountBlocked:true,ownerAllowed:true,sentinelHashes};
+ const evidence:ProtectionEvidence={version:2,method:'independent-identity-policy-and-nondisclosure',ownerIdentityHash,otherIdentityHash,policyChecksHash,accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,checkedAt:new Date().toISOString(),settingsFingerprint:settingsFingerprint(settings),policyFingerprint:snapshot.fingerprint,hosts:snapshot.hosts,anonymousBlocked:true,otherAccountBlocked:true,ownerAllowed:true,sentinelHashes};
  assertReleaseAllowed({settings,snapshot,evidence});await writeReport(evidence,proof,[resolve(root,'dist')],root);return evidence;
  }catch{throw Error('Access verification failed; protection evidence is invalid');}
 }

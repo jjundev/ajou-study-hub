@@ -241,3 +241,11 @@ Ruling: Remove only repeated-build test historical30s override, inheritalreadyap
 ```text
 Ruling: AddnarrowboundedWindows EPERM/EACCES/EBUSY atomicreport-rename retry, eachattemptrevalidatestemp/destination/allcontainment/alias/sourceexclusions; no unlink/truncate/fallbacksuccess — fourthfull166/167failedonlyactualEPERMonisolatedfalseproofrename,528.01s; repeatedbuildnowpasses — ifwrong, transientpublicationtakes<1slonger; persistenterrorsstillthrow/neverclaimsproofinvalidated, addrealfile eventual/alias/persistentrejection tests.
 ```
+
+## 41 — 2026-10-26 사용자 승인
+
+사용자는 OTP 전용·본인 이메일 하나 허용 정책을 유지하며, 다른 계정의 최종 HTTP 403 조건을 독립 사용자 신원 확인·Cloudflare 공식 정책 거부 판정·검증 파일 6개 미노출을 결합하는 기준으로 대체하고 테스트·배포를 진행하도록 명시적으로 승인했다. 실제 OTP 흐름은 비허용 계정에 최종 거부 대신 로그인 화면을 반환했으며, 공식 정책 검사 API와 Dashboard는 본인 허용·다른 계정 거부를 반환했다. 정책 검사만으로 성공 처리하지 않고 두 신원·공식 판정·실제 응답·검사 전후 정책 일치를 모두 요구한다. 보호 증거 v2를 도입하고 이전 형식은 거절한다. 이는 실제 대상 앱의 최종 거부 응답을 직접 확인하는 이전 기준과 구별한다.
+
+## 42 — 2026-10-26 실제 OTP 신원 응답 호환
+
+재로그인한 실제 OTP 사용자 신원에는 `service_token_status`가 생략됐지만 계정·이메일·사용자 UUID와 실제 앱의 OTP 공급자 ID가 일치했다. 생략 상태는 읽기 API가 확인한 해당 공급자의 `idp.id`·`type: onetimepin`을 직접 대조하는 경우에만 허용한다. 공급자 인자 없이 생략된 상태, 명시적 true/null/문자열, 다른 공급자, service_token_id 또는 사용자 신원 누락은 계속 거절한다. 실패 회귀 테스트를 먼저 확인한 뒤 보완했고 실제 보존 세션을 신원·공식 허용 판정으로 검증했다. 추가 로그인이나 정책 완화 없이 게시 후 실제 자료의 12개 대표 경로 검사에 사용했다.

@@ -1,3 +1,4 @@
+import { readCloudflareList } from './cloudflare-list.js';
 import { build } from 'vite';
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
@@ -109,11 +110,11 @@ export async function uploadBootstrap():Promise<void>{
     if(settings.previewUrls.length) throw Error('Bootstrap requires disabled previews');
     const token=process.env.CLOUDFLARE_API_TOKEN;if(!token)throw Error('No API token');
     const request=fetch;
-    async function get(path:string){const response=await request('https://api.cloudflare.com/client/v4'+path,{headers:{Authorization:`Bearer ${token}`},redirect:'error'});if(!response.ok)throw Error('API unavailable');const value=await response.json();if(!value||value.success!==true||!('result'in value)||(value.errors?.length)||value.result_info?.total_pages>1||value.result_info?.cursor||value.result_info?.cursors?.after)throw Error('API invalid');return value.result;}
-    const account=await get('/accounts/'+settings.accountId);if(account.id!==settings.accountId)throw Error('Account mismatch');
-    const subscriptions=await get('/accounts/'+settings.accountId+'/subscriptions');
+    async function get(path:string){const response=await request('https://api.cloudflare.com/client/v4'+path,{headers:{Authorization:`Bearer ${token}`},redirect:'error'});if(!response.ok)throw Error('API unavailable');const value=await response.json();if(!value||value.success!==true||!('result'in value)||(value.errors?.length)||value.result_info?.total_pages>1||value.result_info?.cursor||value.result_info?.cursors?.after)throw Error('API invalid');return value;}
+    const account=(await get('/accounts/'+settings.accountId)).result;if(account.id!==settings.accountId)throw Error('Account mismatch');
+    const subscriptions=await readCloudflareList(get,'/accounts/'+settings.accountId+'/subscriptions','single-complete');
     assertFreeSubscriptions(subscriptions);
-    const subdomain=await get('/accounts/'+settings.accountId+'/workers/subdomain');
+    const subdomain=(await get('/accounts/'+settings.accountId+'/workers/subdomain')).result;
     if(settings.productionUrl!==`https://${settings.workerName}.${subdomain.subdomain}.workers.dev`)throw Error('Target host mismatch');
     const result=await buildBootstrap(resolve(project,'.generated/bootstrap'));
     const report=JSON.parse(await readFile(resolve(project,'.reports/bootstrap-build.json'),'utf8')) as BuildReport;
