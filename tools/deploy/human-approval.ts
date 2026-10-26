@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
@@ -6,6 +6,8 @@ import { verificationProject } from '../verification-project.js';
 import { assertCurrentBundle } from '../runtime-server.js';
 import { inventory } from './bootstrap.js';
 import { writeReport, type BuildReport } from '../content/report.js';
+import { bundleLimits } from '../content/preflight.js';
+import type { Catalog } from '../../src/content/model.js';
 import { validateSettings, settingsFingerprint, readIndependentIdentity, readPolicyDecision, verifyPolicyBoundNonDisclosure, type DeploymentSettings } from './access.js';
 import { readAccessInspection, exactKeys, digest, canonical, sha256 } from './access-policy.js';
 export type ProbeRow={path:string;sha256:string;kind:'catalog'|'html'|'nested-html'|'image'|'pdf'|'font';ownerExact:boolean;anonymousBlocked:boolean;otherBlocked:boolean};
@@ -35,9 +37,55 @@ export function validateManifest(value:unknown):asserts value is BuildReport {
  for(const output of value.outputs){exactKeys(output,['path','sha256','size']);if(!pathValue(output.path)||!hashValue(output.sha256)||!Number.isSafeInteger(output.size)||(output.size as number)<=0)fail();}
  for(const issue of value.issues){exactKeys(issue,['code','courseId','sourcePath','target','reason','severity']);if(Object.values(issue).some(v=>typeof v!=='string')||issue.severity!=='warning')fail();}
 }
-function representatives(manifest:BuildReport){
+function validateCatalog(value:unknown):asserts value is Catalog {
+ exactKeys(value,['version','courses','groups','documents']);
+ if(value.version!==1||![value.courses,value.groups,value.documents].every(v=>Array.isArray(v)&&v.length<=bundleLimits.maxFiles))fail();
+ const text=(v:unknown):v is string=>typeof v==='string'&&v.trim().length>0&&!v.includes('\0');
+ const courses=new Set<string>(),groups=new Map<string,string>(),groupPaths=new Set<string>(),documents=new Set<string>();
+ for(const course of value.courses as unknown[]){
+  exactKeys(course,['id','name','repo','semester']);
+  if(!pathValue(course.id)||course.id.includes('/')||!text(course.name)||!text(course.repo)||course.semester!=='2026-2'||courses.has(course.id))fail();
+  courses.add(course.id);
+ }
+ for(const group of value.groups as unknown[]){
+  exactKeys(group,['id','courseId','title','sourcePath','kind','date','order']);
+  if(!text(group.id)||!text(group.courseId)||!courses.has(group.courseId)||!text(group.title)||!pathValue(group.sourcePath)||!['date','experiment','supplement'].includes(group.kind as string)||(group.date!==null&&!text(group.date))||!Number.isSafeInteger(group.order)||(group.order as number)<0||groups.has(group.id))fail();
+  const key=group.courseId+'/'+group.sourcePath.normalize('NFC');if(groupPaths.has(key))fail();
+  groups.set(group.id,group.courseId);groupPaths.add(key);
+ }
+ for(const document of value.documents as unknown[]){
+  exactKeys(document,['id','courseId','groupId','title','type','sourcePath','url','listed']);
+  if(!text(document.id)||documents.has(document.id)||!text(document.courseId)||!courses.has(document.courseId)||(document.groupId!==null&&(!text(document.groupId)||groups.get(document.groupId)!==document.courseId))||!text(document.title)||!['note','review','explanation','interactive','other'].includes(document.type as string)||!pathValue(document.sourcePath)||!text(document.url)||typeof document.listed!=='boolean')fail();
+  documents.add(document.id);
+ }
+}
+async function representatives(dist:string,manifest:BuildReport){
+ const entry=manifest.outputs.find(f=>f.path==='catalog.json');
+ if(!entry||entry.size>bundleLimits.maxFileBytes)fail();
+ // Bound the read even if the file grows after inventory, and authenticate the
+ // exact bytes used for classification rather than trusting parsed metadata.
+ const file=await open(resolve(dist,'catalog.json'),'r');let catalog:unknown;
+ try{
+  const bytes=Buffer.alloc(entry.size+1);let length=0;
+  while(length<bytes.length){const {bytesRead}=await file.read(bytes,length,bytes.length-length,length);if(!bytesRead)break;length+=bytesRead;}
+  if(length!==entry.size||sha256(bytes.subarray(0,length))!==entry.sha256)fail();
+  catalog=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,length)));
+ }finally{await file.close();}
+ validateCatalog(catalog);
  const paths=manifest.outputs.map(f=>f.path).sort();
- const matches:Record<ProbeRow['kind'],(p:string)=>boolean>={catalog:p=>p==='catalog.json',html:p=>/^content\/.+\.html?$/i.test(p)&&p.split('/').length===3,'nested-html':p=>/^content\/.+\.html?$/i.test(p)&&p.split('/').length>3,image:p=>/^content\/.+\.(png|jpg|jpeg|gif|webp|svg|avif)$/i.test(p),pdf:p=>/^content\/.+\.pdf$/i.test(p),font:p=>/^content\/.+\.(woff2?|ttf|otf)$/i.test(p)};
+ const htmlByUrl=new Map(paths.filter(p=>/^content\/.+\.html?$/i.test(p)).map(p=>['/'+p.split('/').map(encodeURIComponent).join('/'),p]));
+ const listedByPath=new Map<string,boolean>();
+ for(const document of catalog.documents){
+  // Never decode a catalog URL or use it to construct a filesystem path.
+  const path=htmlByUrl.get(document.url);if(!path||listedByPath.has(path))fail();
+  const [,courseId,...source]=path.split('/');
+  if(courseId!==document.courseId||source.join('/')!==document.sourcePath.normalize('NFC'))fail();
+  listedByPath.set(path,document.listed);
+ }
+ // App shell HTML is outside content/. Every material HTML must be classified;
+ // an orphan is a provenance gap, never evidence that linked HTML is absent.
+ if(listedByPath.size!==htmlByUrl.size)fail();
+ const matches:Record<ProbeRow['kind'],(p:string)=>boolean>={catalog:p=>p==='catalog.json',html:p=>listedByPath.get(p)===true,'nested-html':p=>listedByPath.get(p)===false,image:p=>/\.(png|jpg|jpeg|gif|webp|svg|avif)$/i.test(p),pdf:p=>/\.pdf$/i.test(p),font:p=>/\.(woff2?|ttf|otf)$/i.test(p)};
  const selected:{path:string;kind:ProbeRow['kind']}[]=[],absentKinds:string[]=[];
  for(const kind of kinds){const path=paths.find(matches[kind]);if(path)selected.push({path,kind});else if(kind==='catalog'||kind==='html')fail();else absentKinds.push(kind);}
  return {selected,absentKinds};
@@ -63,7 +111,7 @@ export async function verifyProduction(settings:DeploymentSettings,manifest:Buil
   settings=structuredClone(settings);manifest=structuredClone(manifest);
   await assertCurrentBundle(dist,manifest,root);
   if(canonical(await inventory(dist))!==canonical(manifest.outputs))fail();
-  const {selected,absentKinds}=representatives(manifest),initial=await readAccessInspection(settings),snapshot=initial.snapshot;
+  const {selected,absentKinds}=await representatives(dist,manifest),initial=await readAccessInspection(settings),snapshot=initial.snapshot;
   const rows:ProbeRow[]=[];let ownerIdentityHash='',otherIdentityHash='',policyChecksHash='';
   // Browser children need runtime settings, not the Node process's API/App credentials.
   const credentialKeys=new Set(['CLOUDFLARE_API_TOKEN','CLOUDFLARE_READ_TOKEN','GH_TOKEN','GITHUB_TOKEN','STUDY_HUB_READER_PRIVATE_KEY','STUDY_HUB_DISPATCH_PRIVATE_KEY','STUDY_HUB_LEDGER_PRIVATE_KEY']);
