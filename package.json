@@ -25,6 +25,7 @@
     "access:verify": "tsx tools/deploy/access.ts",
     "access:verify-production": "tsx tools/deploy/human-approval.ts",
     "access:approve-automation": "tsx tools/deploy/access-baseline.ts",
+    "access:automation-readiness": "tsx tools/deploy/auto-readiness.ts",
     "deploy:private": "tsx tools/cli.ts deploy:private"
   },
   "dependencies": {
