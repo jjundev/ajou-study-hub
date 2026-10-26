@@ -9,7 +9,7 @@ function server(change:Record<string,unknown>={},name='ajou-study-hub'){
   const url=new URL(String(input));calls.push(url.pathname);
   if(url.hostname!=='api.cloudflare.com'){
    probes.push(init??{});
-   return new Response(enabled?'recovery-test':'error code: 1003',{status:enabled?200:404,...(change.probeRedirect?{headers:{Location:'https://evil.example'}}:{})});
+   return new Response(enabled?'recovery-test':String(change.disabledBody??'error code: 1003'),{status:enabled?200:Number(change.disabledStatus??404),...(change.probeRedirect&&!enabled?{headers:{Location:'https://evil.example'}}:{})});
   }
   if(change.throw)throw Error('private-token-or-body');
   let result:unknown;
@@ -31,7 +31,7 @@ function server(change:Record<string,unknown>={},name='ajou-study-hub'){
 }
 it('recovery_targets_only_one_worker and sends no API credentials to public probes',async()=>{
  const s=server();await disableEndpoint(settings,workerId,s.request,'test-token');
- expect(s.writes).toEqual([{path:'/accounts/'+accountId+'/workers/scripts/ajou-study-hub/subdomain',body:{enabled:false}}]);
+ expect(s.writes).toEqual([{path:'/accounts/'+accountId+'/workers/scripts/ajou-study-hub/subdomain',body:{enabled:false,previews_enabled:false}}]);
  expect(s.probes.length).toBeGreaterThan(0);
  for(const p of s.probes){expect(new Headers(p.headers).has('Authorization')).toBe(false);expect(p.redirect).toBe('error');expect(p.credentials).toBe('omit');expect(p.signal).toBeDefined();}
  expect(s.calls.some(p=>p.includes('/access/'))).toBe(false);
@@ -53,13 +53,24 @@ it('rejects external redirects and does not retry or expose request errors',asyn
 it('rehearses only the literal empty target and restores only after observed disable',async()=>{
  const s=server({},'ajou-study-hub-recovery-test');
  await expect(rehearseRecovery({accountId,workerId,workerName:'ajou-study-hub-recovery-test',productionUrl:'https://ajou-study-hub-recovery-test.example.workers.dev'},s.request,'test-token')).resolves.toEqual({disabledConfirmed:true,restoredConfirmed:true});
- expect(s.writes.map(w=>w.body)).toEqual([{enabled:false},{enabled:true}]);
+ expect(s.writes.map(w=>w.body)).toEqual([{enabled:false,previews_enabled:false},{enabled:true,previews_enabled:false}]);
 });
 it.each([{source:'private material'},{sourceType:'multipart/form-data; boundary=x'},{sourceName:'attachment; filename="other.js"'},{settings:{bindings:[{name:'SECRET',type:'secret_text'}]}},{settings:{assets:{}}},{stuck:true}])('refuses unsafe rehearsal or unconfirmed disable %j',async change=>{
  const s=server(change,'ajou-study-hub-recovery-test');await expect(rehearseRecovery({accountId,workerId,workerName:'ajou-study-hub-recovery-test',productionUrl:'https://ajou-study-hub-recovery-test.example.workers.dev'},s.request,'test-token')).rejects.toThrow();
- expect(s.writes.every(w=>JSON.stringify(w.body)==='{"enabled":false}')).toBe(true);
+ expect(s.writes.every(w=>JSON.stringify(w.body)==='{"enabled":false,"previews_enabled":false}')).toBe(true);
 });
 it('rejects oversized API responses before any write',async()=>{
  const methods:string[]=[];const oversized:typeof fetch=async(_input,init)=>{methods.push(init?.method??'GET');return new Response('x'.repeat(1024*1024+1));};
  await expect(disableEndpoint(settings,workerId,oversized,'test-token')).rejects.toThrow();expect(methods).toEqual(['GET']);
+});
+it('rejects BOM-prefixed source bytes even though UTF-8 decoding strips the BOM',async()=>{
+ const s=server({source:'\ufeffexport default {fetch(){return new Response("recovery-test");}};'},'ajou-study-hub-recovery-test');
+ await expect(rehearseRecovery({accountId,workerId,workerName:'ajou-study-hub-recovery-test',productionUrl:'https://ajou-study-hub-recovery-test.example.workers.dev'},s.request,'test-token')).rejects.toThrow();
+ expect(s.writes).toEqual([]);
+});
+it.each([{disabledBody:'generic not found'},{disabledStatus:403,disabledBody:'error code: 1003'},{probeRedirect:true}])('does not restore after API disable and unproven external withdrawal %j',async change=>{
+ const s=server(change,'ajou-study-hub-recovery-test');
+ await expect(rehearseRecovery({accountId,workerId,workerName:'ajou-study-hub-recovery-test',productionUrl:'https://ajou-study-hub-recovery-test.example.workers.dev'},s.request,'test-token')).rejects.toThrow();
+ expect(s.writes.every(w=>(w.body as {enabled:boolean}).enabled===false)).toBe(true);
+ expect(s.writes).toHaveLength(1);
 });
