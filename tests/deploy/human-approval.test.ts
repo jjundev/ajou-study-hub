@@ -27,7 +27,7 @@ import { inventory } from '../../tools/deploy/bootstrap.js';
 import type { Browser } from '@playwright/test';
 const project=vi.hoisted(()=>({root:''}));
 vi.mock('../../tools/verification-project.js',()=>({verificationProject:async()=>{if(!project.root)throw Error('No isolated project');return project.root;}}));
-it.each(['success','trusted-login','anonymous-generic-403','other-generic-403','redirect-generic-403','redirect-leak','wrong-login-host','missing-login-marker','missing-optional','owner-bytes','anonymous-leak','other-leak','same-user','wrong-provider','policy-other-allowed','policy-post-change','identity-post-change','inspection-post-change','version-post-change','bundle-post-change'])('checks actual manifest bytes and independent pre/post identity and policy: %s',async kind=>{
+it.each(['success','browser-env','trusted-login','anonymous-generic-403','other-generic-403','redirect-generic-403','redirect-leak','wrong-login-host','missing-login-marker','missing-optional','owner-bytes','anonymous-leak','other-leak','same-user','wrong-provider','policy-other-allowed','policy-post-change','identity-post-change','inspection-post-change','version-post-change','bundle-post-change'])('checks actual manifest bytes and independent pre/post identity and policy: %s',async kind=>{
  const root=await mkdtemp(resolve(tmpdir(),'hub-human-'));project.root=root;
  const bytes=new Map([['index.html','APP'],['assets/app.js','JS'],['catalog.json','CATALOG'],['content/course/lesson.html','HTML'],...(kind==='missing-optional'?[]:[['content/course/.pack/nested.html','NESTED'],['content/course/.assets/image.png','IMAGE'],['content/course/book.pdf','PDF'],['content/course/.assets/font.woff2','FONT']])].map(([p,b])=>[p!,Buffer.from('SYNTHETIC_'+b)]));
  let identities=0,policyReads=0,inspectionReads=0,closed=false;
@@ -35,9 +35,15 @@ it.each(['success','trusted-login','anonymous-generic-403','other-generic-403','
  const inspection={workerId:'immutable-worker-id',versionId:'22222222-2222-2222-2222-222222222222',protectionFingerprint:'a'.repeat(64),snapshot:{accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,allowedEmails:[settings.allowedEmail],workerWide:true,hasBypass:false,hosts:[settings.productionUrl],freePlan:true,fingerprint:'b'.repeat(64),authDomain:'team.cloudflareaccess.com',otpProviderId:'otp-id'}};
  const reader=vi.spyOn(policy,'readAccessInspection').mockImplementation(async()=>{inspectionReads++;return {...inspection,...(inspectionReads===2&&kind==='inspection-post-change'?{protectionFingerprint:'c'.repeat(64)}:{}),...(inspectionReads===2&&kind==='version-post-change'?{versionId:'33333333-3333-3333-3333-333333333333'}:{})};});
  vi.stubEnv('CLOUDFLARE_API_TOKEN','synthetic');
- const api=vi.spyOn(globalThis,'fetch').mockImplementation(async input=>{const url=new URL(String(input));if(!url.pathname.endsWith('/user_policy_checks'))throw Error('Wrong policy endpoint');policyReads++;const owner=url.searchParams.get('user_id')==='owner-uuid';const status=owner||kind==='policy-other-allowed'||kind==='policy-post-change'&&policyReads>2?'success':'fail';return new Response(JSON.stringify({success:true,errors:[],result:{app_state:{app_uid:settings.accessAppId,status,policies:[{decision:'allow',status}]},user_identity:{account_id:settings.accountId,user_uuid:owner?'owner-uuid':'other-uuid',email:owner?settings.allowedEmail:'other@example.test'}}}));});
+ const credentialKeys=['CLOUDFLARE_API_TOKEN','CLOUDFLARE_READ_TOKEN','GH_TOKEN','GITHUB_TOKEN','STUDY_HUB_READER_PRIVATE_KEY','STUDY_HUB_DISPATCH_PRIVATE_KEY','STUDY_HUB_LEDGER_PRIVATE_KEY'];
+ if(kind==='browser-env'){
+  for(const key of credentialKeys)vi.stubEnv(key,key==='CLOUDFLARE_API_TOKEN'?'synthetic':'synthetic-'+key);
+  vi.stubEnv('STUDY_HUB_TEST_BROWSER_RUNTIME','synthetic-runtime');
+ }
+ const contexts:unknown[]=[];
+ const api=vi.spyOn(globalThis,'fetch').mockImplementation(async (input,options)=>{expect(options?.headers).toEqual({Authorization:'Bearer synthetic'});const url=new URL(String(input));if(!url.pathname.endsWith('/user_policy_checks'))throw Error('Wrong policy endpoint');policyReads++;const owner=url.searchParams.get('user_id')==='owner-uuid';const status=owner||kind==='policy-other-allowed'||kind==='policy-post-change'&&policyReads>2?'success':'fail';return new Response(JSON.stringify({success:true,errors:[],result:{app_state:{app_uid:settings.accessAppId,status,policies:[{decision:'allow',status}]},user_identity:{account_id:settings.accountId,user_uuid:owner?'owner-uuid':'other-uuid',email:owner?settings.allowedEmail:'other@example.test'}}}));});
  const response=(status:number,body:Buffer,identity?:unknown,headers:Record<string,string>={'cf-ray':'test'})=>({status:()=>status,headers:()=>headers,body:async()=>body,json:async()=>identity});
- const launch=vi.spyOn(chromium,'launch').mockResolvedValue({newContext:async(options?:{storageState?:string})=>{const role=options?.storageState?.endsWith('owner.json')?'owner':options?.storageState?.endsWith('other.json')?'other':'anonymous';return {request:{get:async(url:string)=>{
+ const launch=vi.spyOn(chromium,'launch').mockResolvedValue({newContext:async(options?:{storageState?:string})=>{contexts.push(options);const role=options?.storageState?.endsWith('owner.json')?'owner':options?.storageState?.endsWith('other.json')?'other':'anonymous';return {request:{get:async(url:string)=>{
   if(url==='https://team.cloudflareaccess.com/cdn-cgi/access/get-identity'){identities++;return response(200,Buffer.from(''),{account_id:settings.accountId,user_uuid:kind==='same-user'?'owner-uuid':role+'-uuid',email:role==='owner'?settings.allowedEmail:kind==='identity-post-change'&&identities>2?'changed@example.test':'other@example.test',idp:{id:kind==='wrong-provider'?'wrong':'otp-id',type:'onetimepin'}});}
   if(url.startsWith('https://team.cloudflareaccess.com/cdn-cgi/access/login/')){
    if(kind==='redirect-generic-403')return response(403,Buffer.from('Access denied'));
@@ -57,9 +63,15 @@ it.each(['success','trusted-login','anonymous-generic-403','other-generic-403','
   const outputs=await inventory(resolve(root,'dist'));
   const manifest={createdAt:new Date().toISOString(),bundleHash:sha(outputs.map(f=>`${f.path}\0${f.sha256}\n`).join('')),sources:[{courseId:'course',commit:'a'.repeat(40),dirty:true,trackedPaths:['lesson.html'],explicitUntracked:[]}],inputs:[{courseId:'course',path:'lesson.html',sha256:sha('input')}],outputs,issues:[]};
   const run=verifyProduction(settings,manifest as any,resolve(root,'owner.json'),resolve(root,'other.json'));
-  if(kind==='success'||kind==='trusted-login'||kind==='missing-optional'){
+  if(kind==='success'||kind==='browser-env'||kind==='trusted-login'||kind==='missing-optional'){
    const evidence=await run;expect(evidence.rows.every(r=>r.ownerExact&&r.anonymousBlocked&&r.otherBlocked)).toBe(true);expect(evidence.ownerIdentityHash).not.toBe(evidence.otherIdentityHash);expect(evidence.rows.map(r=>r.kind)).toEqual(kind!=='missing-optional'?['catalog','html','nested-html','image','pdf','font']:['catalog','html']);expect(evidence.absentKinds).toEqual(kind!=='missing-optional'?[]:['nested-html','image','pdf','font']);expect(evidence.rows.every(r=>r.sha256===sha(bytes.get(r.path)!))).toBe(true);expect(JSON.parse(await readFile(resolve(root,'.reports/production-access-evidence.json'),'utf8'))).toEqual(evidence);expect(policyReads).toBe(4);expect(identities).toBe(4);
   }else{await expect(run).rejects.toThrow(/^Production Access verification failed; evidence remains invalid$/);expect(JSON.parse(await readFile(resolve(root,'.reports/production-access-evidence.json'),'utf8'))).toMatchObject({passed:false});}
+  if(kind==='browser-env'){
+   const env=launch.mock.calls[0]?.[0]?.env;expect(env).toBeDefined();
+   for(const key of credentialKeys){expect(Object.hasOwn(env!,key)).toBe(false);expect(process.env[key]).toBe(key==='CLOUDFLARE_API_TOKEN'?'synthetic':'synthetic-'+key);}
+   expect(env!.STUDY_HUB_TEST_BROWSER_RUNTIME).toBe('synthetic-runtime');expect(process.env.STUDY_HUB_TEST_BROWSER_RUNTIME).toBe('synthetic-runtime');
+   expect(contexts).toEqual([{storageState:resolve(root,'owner.json')},{storageState:resolve(root,'other.json')},undefined]);
+  }
   expect(closed).toBe(true);
  }finally{reader.mockRestore();api.mockRestore();launch.mockRestore();vi.unstubAllEnvs();project.root='';await rm(root,{recursive:true,force:true});}
 });

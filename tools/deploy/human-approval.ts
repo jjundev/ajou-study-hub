@@ -65,7 +65,10 @@ export async function verifyProduction(settings:DeploymentSettings,manifest:Buil
   if(canonical(await inventory(dist))!==canonical(manifest.outputs))fail();
   const {selected,absentKinds}=representatives(manifest),initial=await readAccessInspection(settings),snapshot=initial.snapshot;
   const rows:ProbeRow[]=[];let ownerIdentityHash='',otherIdentityHash='',policyChecksHash='';
-  const browser=await chromium.launch();
+  // Browser children need runtime settings, not the Node process's API/App credentials.
+  const credentialKeys=new Set(['CLOUDFLARE_API_TOKEN','CLOUDFLARE_READ_TOKEN','GH_TOKEN','GITHUB_TOKEN','STUDY_HUB_READER_PRIVATE_KEY','STUDY_HUB_DISPATCH_PRIVATE_KEY','STUDY_HUB_LEDGER_PRIVATE_KEY']);
+  const browserEnv=Object.fromEntries(Object.entries(process.env).filter((entry):entry is [string,string]=>entry[1]!==undefined&&!credentialKeys.has(entry[0].toUpperCase())));
+  const browser=await chromium.launch({env:browserEnv});
   try{
    const owner=await browser.newContext({storageState:resolve(ownerStatePath)}),other=await browser.newContext({storageState:resolve(otherStatePath)}),anonymous=await browser.newContext();
    const ownerIdentity=await readIndependentIdentity(owner.request,snapshot.authDomain,settings.accountId,snapshot.otpProviderId),otherIdentity=await readIndependentIdentity(other.request,snapshot.authDomain,settings.accountId,snapshot.otpProviderId);
