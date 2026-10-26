@@ -21,6 +21,8 @@
     "bootstrap:build": "tsx tools/deploy/bootstrap.ts build",
     "deploy:bootstrap": "tsx tools/deploy/bootstrap.ts upload",
     "access:verify": "tsx tools/deploy/access.ts",
+    "access:verify-production": "tsx tools/deploy/human-approval.ts",
+    "access:approve-automation": "tsx tools/deploy/access-baseline.ts",
     "deploy:private": "tsx tools/cli.ts deploy:private"
   },
   "dependencies": {

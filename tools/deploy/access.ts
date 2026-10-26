@@ -23,7 +23,7 @@ export function validateSettings(v:unknown):asserts v is DeploymentSettings {
  if(new Set(urls).size!==urls.length)fail();
 }
 export function settingsFingerprint(settings:DeploymentSettings):string {validateSettings(settings);return hash(stable({...settings,previewUrls:[...settings.previewUrls].sort()}));}
-export type AccessReadData={worker:Obj;apps:Obj[];policies:Record<string,Obj[]>;idps:Obj[];hosts:string[];subscriptions:Obj[];organization:Obj};
+export type AccessReadData={worker:Obj;apps:Obj[];policies:Record<string,Obj[]>;idps:Obj[];hosts:string[];subscriptions:Obj[];organization:Obj;exposure?:{subdomain:Obj;accountSubdomain:Obj;routes:Obj[]}};
 function teamOrigin(authDomain:unknown):string{
  if(typeof authDomain!=='string'||!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.cloudflareaccess\.com$/.test(authDomain))fail();
  return 'https://'+authDomain;
@@ -72,7 +72,7 @@ export function normalizeAccess(settings:DeploymentSettings,data:AccessReadData)
 }
 export type ReadOptions={fetch?:typeof fetch;token?:string};
 /** GET-only API; no auth bodies or Cloudflare error text escape this boundary. */
-export async function readAccessSnapshot(settings:DeploymentSettings,options:ReadOptions={}):Promise<AccessSnapshot>{
+export async function readAccessData(settings:DeploymentSettings,options:ReadOptions={}):Promise<AccessReadData>{
  try{
  validateSettings(settings);const token=options.token??process.env.CLOUDFLARE_API_TOKEN;if(!token)fail();const request=options.fetch??fetch;
  const base=`/accounts/${settings.accountId}`;
@@ -88,14 +88,19 @@ export async function readAccessSnapshot(settings:DeploymentSettings,options:Rea
  if(!object(worker.references)||!Array.isArray(worker.references.domains)||worker.references.domains.length)fail();
  // Zone route inventory: reject all target script routes; worker-wide scope still protects
  // them, but accepting an unprobed address would make evidence incomplete.
- const zones=await list('/zones?account.id='+settings.accountId);
- for(const zone of zones){if(typeof zone.id!=='string')fail();const routes=await list('/zones/'+zone.id+'/workers/routes','single');if(routes.some(r=>r.script===settings.workerName))fail();}
+ const zones=await list('/zones?account.id='+settings.accountId);const inspectedRoutes:Obj[]=[];
+ for(const zone of zones){if(typeof zone.id!=='string')fail();const routes=await list('/zones/'+zone.id+'/workers/routes','single');if(routes.some(r=>r.script===settings.workerName))fail();inspectedRoutes.push(...routes);}
  const apps=await list(base+'/access/apps');const policies:Record<string,Obj[]>={};
  for(const app of apps){if(typeof app.id!=='string')fail();policies[app.id]=await list(base+'/access/apps/'+encodeURIComponent(app.id)+'/policies');}
  const idps=await list(base+'/access/identity_providers','single'),subscriptions=await list(base+'/subscriptions','single-complete');
  const organization=(await get(base+'/access/organizations')).result;
- return normalizeAccess(settings,{worker,apps,policies,idps,subscriptions,organization,hosts:[`https://${settings.workerName}.${accountSub.subdomain}.workers.dev`]});
+ return {worker,apps,policies,idps,subscriptions,organization,exposure:{subdomain:sub,accountSubdomain:accountSub,routes:inspectedRoutes},hosts:[`https://${settings.workerName}.${accountSub.subdomain}.workers.dev`]};
  }catch{throw Error('Cloudflare Access read failed; protection remains unverified');}
+}
+/** Compatibility path retains the full legacy fingerprint and manual v2 contract. */
+export async function readAccessSnapshot(settings:DeploymentSettings,options:ReadOptions={}):Promise<AccessSnapshot>{
+ try{return normalizeAccess(settings,await readAccessData(settings,options));}
+ catch{throw Error('Cloudflare Access read failed; protection remains unverified');}
 }
 export type VerifyOptions=ReadOptions&{testProjectRoot?:string;reportPath?:string};
 type ProbeResponse={status():number;headers():Record<string,string>;body():Promise<Buffer>;json():Promise<any>};
