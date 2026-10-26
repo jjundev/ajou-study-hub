@@ -13,7 +13,7 @@ export function githubLedgerStore(token:string,request:typeof fetch=fetch):Ledge
   }catch{fail();}
  }
  async function ref():Promise<string>{const r=await api('/git/ref/heads/main');if(r.ref!=='refs/heads/main'||!isRecord(r.object)||r.object.type!=='commit'||!sha(r.object.sha))fail();return r.object.sha;}
- async function readSnapshot():Promise<{head:LedgerHead;content:string}>{
+ async function readSnapshot():Promise<{head:LedgerHead;bytes:Buffer}>{
   const repo=await api('');if(repo.private!==true||repo.full_name!=='jjundev/ajou-study-hub-state'||repo.default_branch!=='main')fail();
   const commitSha=await ref(),commit=await api('/git/commits/'+commitSha);
   if(commit.sha!==commitSha||!isRecord(commit.tree)||!sha(commit.tree.sha))fail();
@@ -26,7 +26,7 @@ export function githubLedgerStore(token:string,request:typeof fetch=fetch):Ledge
   const bytes=Buffer.from(encoded,'base64');if(bytes.length!==blob.size||bytes.toString('base64')!==encoded)fail();
   let value:unknown,content:string;try{content=new TextDecoder('utf-8',{fatal:true}).decode(bytes);value=JSON.parse(content);}catch{fail();}validateLedger(value);
   // Detect a ref change while following immutable commit/tree/blob objects.
-  if(await ref()!==commitSha)fail();return {head:{commitSha,value},content};
+  if(await ref()!==commitSha)fail();return {head:{commitSha,value},bytes};
  }
  async function read():Promise<LedgerHead>{return (await readSnapshot()).head;}
  return {read,async compareAndWrite(expected,next){
@@ -39,6 +39,6 @@ export function githubLedgerStore(token:string,request:typeof fetch=fetch):Ledge
   const commit=await api('/git/commits','POST',{message:'Record deployment ledger transition',tree:tree.sha,parents:[expected.commitSha]});
   if(!sha(commit.sha)||!isRecord(commit.tree)||commit.tree.sha!==tree.sha||!Array.isArray(commit.parents)||commit.parents.length!==1||!isRecord(commit.parents[0])||commit.parents[0].sha!==expected.commitSha)fail();
   await api('/git/refs/heads/main','PATCH',{sha:commit.sha,force:false});
-  const confirmed=await readSnapshot();if(confirmed.head.commitSha!==commit.sha||confirmed.content!==content)fail();return confirmed.head;
+  const confirmed=await readSnapshot();if(confirmed.head.commitSha!==commit.sha||!confirmed.bytes.equals(Buffer.from(content,'utf8')))fail();return confirmed.head;
  }};
 }
