@@ -84,7 +84,7 @@ test('bind_requires_five_sources and unique owned repository roots',async()=>{
 test('bind rejects malformed revisions and app SHA before writing settings',async()=>{
  const project=await mkdtemp(join(tmpdir(),'ci-invalid-'));temps.push(project);
  const revisions=courses.map(course=>({courseId:course.id,repository:course.repo,sha:'b'.repeat(40),root:join(project,course.id)}));
- await expect(bindSources(project,'MAIN',revisions)).rejects.toThrow();
- await expect(bindSources(project,appSha,revisions.map((r,i)=>i===0?{...r,sha:'main'}:r))).rejects.toThrow();
- await expect(bindSources(project,appSha,revisions.map((r,i)=>i===0?{...r,unexpected:true}:r))).rejects.toThrow();
+ await expect(bindSources(project,'MAIN',revisions)).rejects.toThrow(/^Invalid app SHA$/);
+ await expect(bindSources(project,appSha,revisions.map((r,i)=>i===0?{...r,sha:'main'}:r))).rejects.toThrow(/^Invalid source revision$/);
+ await expect(bindSources(project,appSha,revisions.map((r,i)=>i===0?{...r,unexpected:true}:r))).rejects.toThrow(/^Invalid source revision$/);
 });
