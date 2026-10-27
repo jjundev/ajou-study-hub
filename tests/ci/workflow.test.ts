@@ -1,6 +1,6 @@
 import { readFile, mkdtemp, mkdir, writeFile, rm, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { expect, test } from 'vitest';
@@ -99,4 +99,22 @@ test('native workflow boundary rejects credential helper in source checkout with
   await exec('git',['config','credential.helper','!synthetic-helper-must-never-execute'],{cwd:source,env});
   expect(await run()).toEqual({code:1,stdout:'',stderr:'BOUNDARY_SOURCE_CREDENTIAL_CONFIG\n'});
  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('workflow bind wrapper preserves safe CLI stderr while discarding stdout and failing the step',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'private-bind-wrapper-TOKEN-'));
+ try{
+  const revisions=join(root,'private-revisions.json');await writeFile(revisions,'[]');
+  const step=(await load()).jobs.verify.steps.find((s:any)=>s.id==='source-limits');
+  const command=step.run.trim().split('\n').at(-1).replace('.local/revisions.json',"'"+revisions.replaceAll('\\','/')+"'");
+  // Execute the actual workflow shell branch against a synthetic invalid baseline.
+  const bash=process.platform==='win32'?resolve((await exec('git',['--exec-path'])).stdout.trim(),'../../../bin/bash.exe'):'bash';
+  let result:{code:number;stdout:string;stderr:string}|undefined;
+  try{await exec(bash,['-e','-o','pipefail','-c',command],{env:{...process.env,GITHUB_SHA:'MAIN'},timeout:20000});}
+  catch(error){result=error as typeof result;}
+  expect(result?.code).toBe(1);expect(result?.stdout).toBe('CI_BIND_FAILED\n');
+  expect(result?.stderr).toBe('{"code":"CI_BIND_APP_SHA_INVALID"}\n');
+  const success=await exec(bash,['-e','-o','pipefail','-c',"node() { printf '%s\\n' 'private success snapshot TOKEN'; };\n"+command],{env:{...process.env,GITHUB_SHA:'a'.repeat(40)},timeout:20000});
+  expect(success.stdout).toBe('');expect(success.stderr).toBe('');
+ }finally{await rm(root,{recursive:true,force:true});}
 });

@@ -7,6 +7,29 @@ import { courses } from '../../config/courses.js';
 import { inspectBoundSources } from '../source-binding.js';
 export type Revision = {courseId:string; repository:string; sha:string; root:string};
 export type SourceSnapshot = {version:1; appSha:string; revisions:Revision[]; inputFingerprint:string; settingsPath:string};
+const sourceCodes=['CI_SOURCE_OPERATION_FAILED','CI_SOURCE_COMMAND_INVALID','CI_BIND_INPUT_FAILED','CI_BIND_APP_SHA_INVALID','CI_BIND_REVISIONS_INVALID','CI_BIND_PROJECT_ROOT_FAILED','CI_BIND_ROOT_FAILED','CI_BIND_ROOT_OVERLAP','CI_BIND_ORIGIN_FAILED','CI_BIND_HEAD_FAILED','CI_BIND_STATUS_FAILED','CI_BIND_SOURCE_DIRTY','CI_BIND_OUTPUT_FAILED','CI_BIND_INSPECTION_FAILED','CI_BIND_PROVENANCE_FAILED'] as const;
+type BindCode=typeof sourceCodes[number];
+type SafeDiagnostic={code:BindCode;courseId?:string};
+const diagnostics=new WeakMap<object,SafeDiagnostic>();
+export class SourceBindError extends Error {
+ readonly safeCode:BindCode;
+ readonly courseId?:string;
+ constructor(code:BindCode,message:string,courseId?:string){
+  super(message);
+  this.safeCode=sourceCodes.includes(code)?code:'CI_SOURCE_OPERATION_FAILED';
+  this.courseId=courses.find(course=>course.id===courseId)?.id;
+  diagnostics.set(this,{code:this.safeCode,...(this.courseId?{courseId:this.courseId}:{})});
+ }
+}
+/** Only internally registered, whitelisted fields survive; never read error properties. */
+export function formatSourceOperationDiagnostic(error:unknown):string {
+ const known=error!==null&&(typeof error==='object'||typeof error==='function')?diagnostics.get(error):undefined;
+ return JSON.stringify(known??{code:'CI_SOURCE_OPERATION_FAILED'})+'\n';
+}
+/** Replace even raw child-process/filesystem exceptions at their stage boundary. */
+async function bindingStage<T>(code:BindCode,message:string,courseId:string|undefined,operation:()=>Promise<T>):Promise<T>{
+ try{return await operation();}catch{throw new SourceBindError(code,message,courseId);}
+}
 const exec=promisify(execFile);
 const shaPattern=/^[a-f0-9]{40}$/;
 const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
@@ -30,13 +53,13 @@ export async function resolveRevisions(request:typeof fetch,token:string):Promis
  return revisions;
 }
 function validatedRevisions(value:unknown):Revision[]{
- if(!Array.isArray(value)||value.length!==courses.length)throw Error('Exactly five sources required');
+ if(!Array.isArray(value)||value.length!==courses.length)throw new SourceBindError('CI_BIND_REVISIONS_INVALID','Exactly five sources required');
  const result:Revision[]=[];
  for(const course of courses){
   const matches=value.filter(r=>record(r)&&r.courseId===course.id);
-  if(matches.length!==1)throw Error('Missing or duplicate source');
+  if(matches.length!==1)throw new SourceBindError('CI_BIND_REVISIONS_INVALID','Missing or duplicate source');
   const revision=matches[0];
-  if(!record(revision)||Object.keys(revision).sort().join(',')!=='courseId,repository,root,sha'||revision.repository!==course.repo||typeof revision.sha!=='string'||!shaPattern.test(revision.sha)||typeof revision.root!=='string'||!revision.root.trim())throw Error('Invalid source revision');
+  if(!record(revision)||Object.keys(revision).sort().join(',')!=='courseId,repository,root,sha'||revision.repository!==course.repo||typeof revision.sha!=='string'||!shaPattern.test(revision.sha)||typeof revision.root!=='string'||!revision.root.trim())throw new SourceBindError('CI_BIND_REVISIONS_INVALID','Invalid source revision',course.id);
   result.push({courseId:course.id,repository:course.repo,sha:revision.sha,root:revision.root});
  }
  return result;
@@ -50,23 +73,31 @@ async function outputPath(project:string,directory:string){
  return target;
 }
 export async function bindSources(project:string,appSha:string,revisions:Revision[]):Promise<SourceSnapshot>{
- if(typeof appSha!=='string'||!shaPattern.test(appSha))throw Error('Invalid app SHA');
- const projectRoot=await realpath(project),ordered=validatedRevisions(revisions),roots=new Set<string>();
+ if(typeof appSha!=='string'||!shaPattern.test(appSha))throw new SourceBindError('CI_BIND_APP_SHA_INVALID','Invalid app SHA');
+ const projectRoot=await bindingStage('CI_BIND_PROJECT_ROOT_FAILED','Cannot inspect project root',undefined,()=>realpath(project)),ordered=validatedRevisions(revisions),roots=new Set<string>();
  for(const revision of ordered){
-  const requested=resolve(projectRoot,revision.root),root=await realpath(requested);
-  if(root!==requested||roots.has(root)||await realpath(await git(root,'rev-parse','--show-toplevel'))!==root)throw Error('Invalid source root ownership');
-  for(const dir of ['.local','.reports'])if(contains(root,resolve(projectRoot,dir))||contains(resolve(projectRoot,dir),root))throw Error('Source overlaps CI output');
-  const origin=await git(root,'remote','get-url','origin');
-  if(![`https://github.com/${revision.repository}`,`https://github.com/${revision.repository}.git`,`git@github.com:${revision.repository}`,`git@github.com:${revision.repository}.git`].includes(origin))throw Error('Source repository ownership mismatch');
-  if(await git(root,'rev-parse','HEAD')!==revision.sha||await git(root,'status','--porcelain','--untracked-files=all'))throw Error('Source is dirty or HEAD moved');
+  const root=await bindingStage('CI_BIND_ROOT_FAILED','Invalid source root ownership',revision.courseId,async()=>{
+   const requested=resolve(projectRoot,revision.root),root=await realpath(requested);
+   if(root!==requested||roots.has(root)||await realpath(await git(root,'rev-parse','--show-toplevel'))!==root)throw Error();
+   return root;
+  });
+  for(const dir of ['.local','.reports'])if(contains(root,resolve(projectRoot,dir))||contains(resolve(projectRoot,dir),root))throw new SourceBindError('CI_BIND_ROOT_OVERLAP','Source overlaps CI output',revision.courseId);
+  await bindingStage('CI_BIND_ORIGIN_FAILED','Source repository ownership mismatch',revision.courseId,async()=>{
+   const origin=await git(root,'remote','get-url','origin');
+   if(![`https://github.com/${revision.repository}`,`https://github.com/${revision.repository}.git`,`git@github.com:${revision.repository}`,`git@github.com:${revision.repository}.git`].includes(origin))throw Error();
+  });
+  await bindingStage('CI_BIND_HEAD_FAILED','Source is dirty or HEAD moved',revision.courseId,async()=>{if(await git(root,'rev-parse','HEAD')!==revision.sha)throw Error();});
+  const status=await bindingStage('CI_BIND_STATUS_FAILED','Cannot inspect source repository',revision.courseId,()=>git(root,'status','--porcelain','--untracked-files=all'));
+  if(status)throw new SourceBindError('CI_BIND_SOURCE_DIRTY','Source is dirty or HEAD moved',revision.courseId);
   roots.add(root);revision.root=root;
  }
- const settingsPath=await outputPath(projectRoot,'.local'),reportPath=await outputPath(projectRoot,'.reports');
- await writeFile(settingsPath,JSON.stringify({roots:Object.fromEntries(ordered.map(r=>[r.courseId,r.root])),explicitUntracked:{}},null,2)+'\n');
- const inspected=await inspectBoundSources(projectRoot,settingsPath);
- if(inspected.snapshot.provenance.some(p=>p.dirty||p.commit!==ordered.find(r=>r.courseId===p.courseId)?.sha))throw Error('Source changed during binding');
+ const [settingsPath,reportPath]=await bindingStage('CI_BIND_OUTPUT_FAILED','Unsafe CI output directory or file',undefined,async()=>[await outputPath(projectRoot,'.local'),await outputPath(projectRoot,'.reports')] as const);
+ await bindingStage('CI_BIND_OUTPUT_FAILED','Cannot write CI source settings',undefined,()=>writeFile(settingsPath,JSON.stringify({roots:Object.fromEntries(ordered.map(r=>[r.courseId,r.root])),explicitUntracked:{}},null,2)+'\n'));
+ const inspected=await bindingStage('CI_BIND_INSPECTION_FAILED','Cannot inspect bound sources',undefined,()=>inspectBoundSources(projectRoot,settingsPath));
+ const changed=inspected.snapshot.provenance.find(p=>p.dirty||p.commit!==ordered.find(r=>r.courseId===p.courseId)?.sha);
+ if(changed)throw new SourceBindError('CI_BIND_PROVENANCE_FAILED','Source changed during binding',courses.find(c=>c.id===changed.courseId)?.id);
  const fingerprintInputs=ordered.map(({courseId,repository,sha})=>({courseId,repository,sha})).sort((a,b)=>a.courseId.localeCompare(b.courseId));
  const inputFingerprint=createHash('sha256').update(JSON.stringify({appSha,revisions:fingerprintInputs})).digest('hex');
  const snapshot:SourceSnapshot={version:1,appSha,revisions:ordered,inputFingerprint,settingsPath};
- await writeFile(reportPath,JSON.stringify(snapshot,null,2)+'\n');return snapshot;
+ await bindingStage('CI_BIND_OUTPUT_FAILED','Cannot write CI source report',undefined,()=>writeFile(reportPath,JSON.stringify(snapshot,null,2)+'\n'));return snapshot;
 }

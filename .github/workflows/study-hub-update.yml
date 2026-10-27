@@ -184,7 +184,7 @@ jobs:
         id: source-limits
         run: |
           node --import tsx tools/ci/source-limits.ts
-          node --import tsx tools/ci/sources-cli.ts bind "$GITHUB_SHA" .local/revisions.json > /dev/null 2>&1 || { echo CI_BIND_FAILED; exit 1; }
+          node --import tsx tools/ci/sources-cli.ts bind "$GITHUB_SHA" .local/revisions.json > /dev/null || { echo CI_BIND_FAILED; exit 1; }
       - name: Build and verify the same pinned material checkout
         run: |
           npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }

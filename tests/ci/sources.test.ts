@@ -1,14 +1,16 @@
-import { afterAll, afterEach, beforeAll, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, writeFile, readFile, rm, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { courses } from '../../config/courses.js';
-import { bindSources, resolveRevisions, type Revision } from '../../tools/ci/sources.js';
+import { bindSources, resolveRevisions, formatSourceOperationDiagnostic, SourceBindError, type Revision } from '../../tools/ci/sources.js';
+import * as binding from '../../tools/source-binding.js';
 const temps:string[]=[];
 let seed:string,seedSha:string,seedConfig:string;
-afterEach(async()=>{await Promise.all(temps.splice(0).map(p=>rm(p,{recursive:true,force:true,maxRetries:5,retryDelay:200})));});
+afterEach(async()=>{vi.restoreAllMocks();await Promise.all(temps.splice(0).map(p=>rm(p,{recursive:true,force:true,maxRetries:5,retryDelay:200})));});
 const git=(root:string,...args:string[])=>execFileSync('git',args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 beforeAll(async()=>{
  seed=await mkdtemp(join(tmpdir(),'ci-source-seed-'));
@@ -87,4 +89,66 @@ test('bind rejects malformed revisions and app SHA before writing settings',asyn
  await expect(bindSources(project,'MAIN',revisions)).rejects.toThrow(/^Invalid app SHA$/);
  await expect(bindSources(project,appSha,revisions.map((r,i)=>i===0?{...r,sha:'main'}:r))).rejects.toThrow(/^Invalid source revision$/);
  await expect(bindSources(project,appSha,revisions.map((r,i)=>i===0?{...r,unexpected:true}:r))).rejects.toThrow(/^Invalid source revision$/);
+});
+
+// Removing a stage boundary must fail these assertions even when binding still rejects.
+test('binding attributes malformed input and missing project to safe stages before settings writes',async()=>{
+ const {project,revisions}=await fixture();
+ await expect(bindSources(project,'MAIN',revisions)).rejects.toMatchObject({safeCode:'CI_BIND_APP_SHA_INVALID'});
+ await expect(bindSources(project,appSha,revisions.slice(1))).rejects.toMatchObject({safeCode:'CI_BIND_REVISIONS_INVALID'});
+ await expect(bindSources(join(project,'private-missing'),appSha,revisions)).rejects.toMatchObject({safeCode:'CI_BIND_PROJECT_ROOT_FAILED'});
+ await expect(readFile(join(project,'.local/ci-sources.json'))).rejects.toMatchObject({code:'ENOENT'});
+});
+
+test.each(['root','overlap','origin','head','status','dirty','output'] as const)('binding rejects %s with its safe stage and leaves source files intact',async kind=>{
+ const {project,revisions}=await fixture(),first=revisions[0]!,before=await readFile(join(first.root,'README.md'),'utf8');
+ const codes={root:'CI_BIND_ROOT_FAILED',overlap:'CI_BIND_ROOT_OVERLAP',origin:'CI_BIND_ORIGIN_FAILED',head:'CI_BIND_HEAD_FAILED',status:'CI_BIND_STATUS_FAILED',dirty:'CI_BIND_SOURCE_DIRTY',output:'CI_BIND_OUTPUT_FAILED'};
+ if(kind==='root')first.root=join(project,'private-missing');
+ if(kind==='overlap'){const root=join(project,'.local');await cp(first.root,root,{recursive:true});first.root=root;}
+ if(kind==='origin')git(first.root,'remote','set-url','origin','https://private.invalid/TOKEN');
+ if(kind==='head')first.sha='0'.repeat(40);
+ if(kind==='status')await writeFile(join(first.root,'.git/index'),'private-corrupt-index-TOKEN');
+ if(kind==='dirty')await writeFile(join(first.root,'private-TOKEN.txt'),'private-content');
+ if(kind==='output')await writeFile(join(project,'.local'),'private-output-TOKEN');
+ await expect(bindSources(project,appSha,revisions)).rejects.toMatchObject({safeCode:codes[kind],...(kind==='output'?{}:{courseId:'logic-lab'})});
+ if(kind!=='root')expect(await readFile(join(first.root,'README.md'),'utf8')).toBe(before);
+});
+
+test('binding contains raw inspection exceptions and attributes late provenance changes',async()=>{
+ const {project,revisions}=await fixture();
+ const inspect=binding.inspectBoundSources;
+ const spy=vi.spyOn(binding,'inspectBoundSources').mockRejectedValueOnce(Error('private/path TOKEN raw Git failure'));
+ await expect(bindSources(project,appSha,revisions)).rejects.toMatchObject({safeCode:'CI_BIND_INSPECTION_FAILED'});
+ spy.mockImplementationOnce(async(...args)=>{const result=await inspect(...args);result.snapshot.provenance[0]!.dirty=true;return result;});
+ await expect(bindSources(project,appSha,revisions)).rejects.toMatchObject({safeCode:'CI_BIND_PROVENANCE_FAILED',courseId:'logic-lab'});
+ await expect(readFile(join(project,'.reports/ci-sources.json'))).rejects.toMatchObject({code:'ENOENT'});
+});
+
+test('formatter emits only trusted codes and fixed course IDs despite hostile error fields',async()=>{
+ const {project,revisions}=await fixture();
+ git(revisions[0]!.root,'remote','set-url','origin','https://private.invalid/TOKEN');
+ let failure:unknown;
+ try{await bindSources(project,appSha,revisions);}catch(error){failure=error;}
+ expect(JSON.parse(formatSourceOperationDiagnostic(failure))).toEqual({code:'CI_BIND_ORIGIN_FAILED',courseId:'logic-lab'});
+ // A captured typed error must not become a path or token channel if fields change.
+ Object.assign(failure as object,{safeCode:'private-TOKEN',courseId:'private-course',message:'private-message',stack:'private-stack'});
+ expect(JSON.parse(formatSourceOperationDiagnostic(failure))).toEqual({code:'CI_BIND_ORIGIN_FAILED',courseId:'logic-lab'});
+ const hostile=new Proxy({}, {get(){throw Error('must not inspect arbitrary exception properties');}});
+ for(const error of [Error('private-path TOKEN'),{safeCode:'CI_BIND_ORIGIN_FAILED',courseId:'logic-lab'},Object.assign(Error(),{code:'CI_BIND_ROOT_FAILED'}),Object.create(Object.getPrototypeOf(failure)),hostile,null,'private-message']){
+  const output=formatSourceOperationDiagnostic(error);
+  expect(output).toBe('{"code":"CI_SOURCE_OPERATION_FAILED"}\n');expect(Buffer.byteLength(output)).toBeLessThan(128);
+ }
+ expect(formatSourceOperationDiagnostic(new SourceBindError('private-TOKEN' as never,'private-message','private-course'))).toBe('{"code":"CI_SOURCE_OPERATION_FAILED"}\n');
+ expect(formatSourceOperationDiagnostic(new SourceBindError('CI_BIND_PROVENANCE_FAILED','private-message','private-course'))).toBe('{"code":"CI_BIND_PROVENANCE_FAILED"}\n');
+});
+
+test('real bind CLI preserves success JSON and contains a raw Git status failure',async()=>{
+ const {project,revisions}=await fixture(),path=join(project,'revisions.json');await writeFile(path,JSON.stringify(revisions));
+ const invoke=()=>spawnSync(process.execPath,['--import',new URL('../../node_modules/tsx/dist/loader.mjs',import.meta.url).href,fileURLToPath(new URL('../../tools/ci/sources-cli.ts',import.meta.url)),'bind',appSha,path],{cwd:project,encoding:'utf8',timeout:20000});
+ const success=invoke();expect(success.status).toBe(0);expect(success.stderr).toBe('');
+ const snapshot=JSON.parse(success.stdout);expect(snapshot).toMatchObject({version:1,appSha,settingsPath:join(project,'.local/ci-sources.json')});
+ expect(snapshot.revisions).toEqual(revisions);expect(snapshot.inputFingerprint).toMatch(/^[a-f0-9]{64}$/);
+ await writeFile(join(revisions[0]!.root,'.git/index'),'private-corrupt-index-TOKEN');
+ const failure=invoke();expect(failure.status).toBe(1);expect(failure.stdout).toBe('');
+ expect(failure.stderr).toBe('{"code":"CI_BIND_STATUS_FAILED","courseId":"logic-lab"}\n');
 });
