@@ -1,10 +1,10 @@
 import { validateSettings, type DeploymentSettings } from './access.js';
 import { exactKeys, isRecord } from './access-policy.js';
 import { readCloudflareList } from './cloudflare-list.js';
+import { assertRecoverySource } from './recovery-source.js';
 
 export type RecoveryTarget={accountId:string;workerId:string;workerName:'ajou-study-hub-recovery-test';productionUrl:string};
 type Target={accountId:string;workerId:string;workerName:string;productionUrl:string};
-const emptySource='export default {fetch(){return new Response("recovery-test");}};';
 function fail():never{throw Error('Endpoint recovery could not be verified');}
 
 /** All response bodies and the entire operation have hard bounds. There are no retries. */
@@ -26,9 +26,8 @@ function client(request:typeof fetch,token:string){
   return envelope;
  }
  return {api,async source(path:string){
-  const r=await read('https://api.cloudflare.com/client/v4'+path,{headers:{Authorization:'Bearer '+token}});
-  if(!r.response.ok||r.response.headers.get('content-type')!=='application/javascript'||r.response.headers.get('content-disposition')!=='attachment; filename="index.js"')fail();
-  return r.bytes;
+  const response=await request('https://api.cloudflare.com/client/v4'+path,{headers:{Authorization:'Bearer '+token},redirect:'error',signal});
+  await assertRecoverySource(response);
  },
   // Never pass API headers, tokens, cookies, or credentials to a Worker.
   probe:(url:string)=>read(url,{method:'GET',credentials:'omit',cache:'no-store'})};
@@ -67,7 +66,7 @@ async function observeDisabled(t:Target,c:Client):Promise<void>{
 async function empty(t:Target,c:Client):Promise<void>{
  const settings=(await c.api(script(t)+'/settings')).result;
  if(!isRecord(settings)||!Array.isArray(settings.bindings)||settings.bindings.length||Object.hasOwn(settings,'assets'))fail();
- if(!(await c.source(script(t))).equals(Buffer.from(emptySource,'utf8')))fail();
+ await c.source(script(t));
  const probe=await c.probe(t.productionUrl);if(probe.response.status!==200||probe.text!=='recovery-test')fail();
 }
 /** Production has no restore operation. Caller must supply the separately approved immutable ID. */
@@ -79,7 +78,7 @@ export async function disableEndpoint(settings:DeploymentSettings,expectedWorker
   await c.api(script(t)+'/subdomain','POST',{enabled:false,previews_enabled:false});await observeDisabled(t,c);
  }catch{fail();}
 }
-/** Rehearsal intentionally supports only an exact, material-free source. Multipart/unknown formats block. */
+/** Rehearsal supports only the two observed envelopes of the exact material-free source. */
 export async function rehearseRecovery(target:RecoveryTarget,request:typeof fetch,token:string):Promise<{disabledConfirmed:boolean;restoredConfirmed:boolean}>{
  try{
   exactKeys(target,['accountId','workerId','workerName','productionUrl']);if(target.workerName!=='ajou-study-hub-recovery-test')fail();

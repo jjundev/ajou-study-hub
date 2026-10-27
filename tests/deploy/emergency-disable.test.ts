@@ -23,7 +23,7 @@ function server(change:Record<string,unknown>={},name='ajou-study-hub'){
   else if(url.pathname.endsWith('/workers/subdomain'))result={subdomain:change.accountSubdomain??'example'};
   else if(url.pathname==='/client/v4/zones')result=[];
   else if(url.pathname.endsWith('/scripts/'+name+'/settings'))result={bindings:[],...change.settings as object};
-  else if(url.pathname.endsWith('/scripts/'+name))return new Response(String(change.source??'export default {fetch(){return new Response("recovery-test");}};'),{headers:{'content-type':String(change.sourceType??'application/javascript'),'content-disposition':String(change.sourceName??'attachment; filename="index.js"')}});
+  else if(url.pathname.endsWith('/scripts/'+name))return new Response(String(change.source??'export default {fetch(){return new Response("recovery-test");}};'),{headers:change.sourceHeaders as HeadersInit??{'content-type':String(change.sourceType??'application/javascript'),'content-disposition':String(change.sourceName??'attachment; filename="index.js"')}});
   else throw Error('Unexpected test route');
   return new Response(JSON.stringify({success:true,errors:Object.hasOwn(change,'errors')?change.errors:[],result,result_info:{page:1,total_pages:1,count:Array.isArray(result)?result.length:undefined}}));
  };
@@ -62,6 +62,36 @@ it('rehearses only the literal empty target and restores only after observed dis
  const s=server({},'ajou-study-hub-recovery-test');
  await expect(rehearseRecovery({accountId,workerId,workerName:'ajou-study-hub-recovery-test',productionUrl:'https://ajou-study-hub-recovery-test.example.workers.dev'},s.request,'test-token')).resolves.toEqual({disabledConfirmed:true,restoredConfirmed:true});
  expect(s.writes.map(w=>w.body)).toEqual([{enabled:false,previews_enabled:false},{enabled:true,previews_enabled:false}]);
+});
+const boundary='b'.repeat(60),literal='export default {fetch(){return new Response("recovery-test");}};';
+const frame=`--${boundary}\r\nContent-Disposition: form-data; name="index.js"\r\n\r\n${literal}\r\n--${boundary}--\r\n`;
+const multipartHeaders={'content-type':`multipart/form-data; boundary=${boundary}`};
+const recoveryTarget={accountId,workerId,workerName:'ajou-study-hub-recovery-test' as const,productionUrl:'https://ajou-study-hub-recovery-test.example.workers.dev'};
+it('rehearses the observed exact single untyped multipart source with final CRLF',async()=>{
+ const s=server({source:frame,sourceHeaders:multipartHeaders},recoveryTarget.workerName);
+ await expect(rehearseRecovery(recoveryTarget,s.request,'test-token')).resolves.toEqual({disabledConfirmed:true,restoredConfirmed:true});
+ expect(s.writes.map(w=>w.body)).toEqual([{enabled:false,previews_enabled:false},{enabled:true,previews_enabled:false}]);
+});
+it.each([
+ ['BOM',frame.replace(literal,'\ufeff'+literal)],['wrong literal',frame.replace('recovery-test','other')],
+ ['preamble','extra'+frame],['epilogue',frame+'extra'],['no final CRLF',frame.slice(0,-2)],['LF',frame.replaceAll('\r\n','\n')],
+ ['duplicate part',frame.replace(`--${boundary}--\r\n`,frame)],['metadata field',frame.replace('name="index.js"','name="metadata"')],
+ ['filename',frame.replace('name="index.js"','name="index.js"; filename="index.js"')],
+ ['content type header',frame.replace('\r\n\r\n','\r\nContent-Type: application/javascript\r\n\r\n')],
+ ['unknown header',frame.replace('\r\n\r\n','\r\nX-Unknown: true\r\n\r\n')],['oversize','x'.repeat(16385)]
+])('rejects multipart %s before disabling',async(_kind,source)=>{
+ const s=server({source,sourceHeaders:multipartHeaders},recoveryTarget.workerName);
+ await expect(rehearseRecovery(recoveryTarget,s.request,'test-token')).rejects.toThrow();expect(s.writes).toEqual([]);
+});
+it.each([
+ {...multipartHeaders,'content-disposition':'attachment; filename="index.js"'},
+ {'content-type':`multipart/form-data; boundary="${boundary}"`},
+ {'content-type':`multipart/form-data; boundary=${boundary}; charset=utf-8`},
+ {'content-type':'multipart/form-data; boundary=x'},
+ {...multipartHeaders,'content-length':'16385'}, {...multipartHeaders,'content-length':'1'}, {...multipartHeaders,'content-length':'bad'}
+])('rejects unsupported source headers %j before disabling',async sourceHeaders=>{
+ const s=server({source:frame,sourceHeaders},recoveryTarget.workerName);
+ await expect(rehearseRecovery(recoveryTarget,s.request,'test-token')).rejects.toThrow();expect(s.writes).toEqual([]);
 });
 it.each([{source:'private material'},{sourceType:'multipart/form-data; boundary=x'},{sourceName:'attachment; filename="other.js"'},{settings:{bindings:[{name:'SECRET',type:'secret_text'}]}},{settings:{assets:{}}},{stuck:true}])('refuses unsafe rehearsal or unconfirmed disable %j',async change=>{
  const s=server(change,'ajou-study-hub-recovery-test');await expect(rehearseRecovery({accountId,workerId,workerName:'ajou-study-hub-recovery-test',productionUrl:'https://ajou-study-hub-recovery-test.example.workers.dev'},s.request,'test-token')).rejects.toThrow();

@@ -39,8 +39,8 @@ function server(change:Record<string,unknown>={}){
   else if(p.endsWith('/subscriptions'))result=[{state:'Paid',price:0,currency:'USD',trial:null,rate_plan:{id:'teams_free',public_name:'Teams Free Base',currency:'USD',scope:'account',externally_managed:false,is_contract:false}}];
   else if(p.endsWith('/access/organizations'))result={auth_domain:'team.cloudflareaccess.com'};
   else if(p.endsWith('/deployments'))result={deployments:[{id:'44444444-4444-4444-4444-444444444444',strategy:'percentage',versions:[{version_id:change.drift&&writes.length?'33333333-3333-3333-3333-333333333333':'22222222-2222-2222-2222-222222222222',percentage:100}]}]};
-  else if(p.endsWith('/scripts/'+name+'/settings'))result={bindings:[],compatibility_date:'2026-10-24',logpush:!!change.configDrift&&writes.length>=5,observability:{enabled:false},tail_consumers:[],...change.scriptSettings as object};
-  else if(p.endsWith('/scripts/'+name))return new Response(uploaded?String(change.source??source):'not uploaded',{headers:{'content-type':'application/javascript','content-disposition':'attachment; filename="index.js"'}});
+  else if(p.endsWith('/scripts/'+name+'/settings')){result={bindings:[],compatibility_date:'2026-10-24',compatibility_flags:[],logpush:!!change.configDrift&&writes.length>=5,observability:{enabled:false},tail_consumers:[],...change.scriptSettings as object};if(change.omitObservability)delete (result as Record<string,unknown>).observability;}
+  else if(p.endsWith('/scripts/'+name))return new Response(uploaded?String(change.source??source):'not uploaded',{headers:change.sourceHeaders as HeadersInit??{'content-type':'application/javascript','content-disposition':'attachment; filename="index.js"'}});
   else throw Error('Unexpected read');
   return new Response(JSON.stringify({success:true,errors:[],result,...(Array.isArray(result)?{result_info:{page:1,total_pages:1,count:result.length,total_count:result.length,per_page:100,next_page:false}}:{})}));
  };
@@ -52,6 +52,12 @@ async function fixture(change:Record<string,unknown>={}){
  const baseline={version:1,contract:'initial-human-current-policy-v1',approvedAt:'2026-10-26T00:00:00.000Z',settingsFingerprint:settingsFingerprint(settings),protectionFingerprint:inspection.protectionFingerprint,workerId:inspection.workerId,humanEvidenceHash:'b'.repeat(64)};
  await writeFile(join(isolated.root,'.local/deployment.json'),JSON.stringify(settings));await writeFile(join(isolated.root,'.reports/automation-baseline.json'),JSON.stringify(baseline));
  return {...s,baseline,readReceipt:async()=>JSON.parse(await readFile(join(isolated.root,'.reports/recovery-target.json'),'utf8'))};
+}
+async function stagedFixture(change:Record<string,unknown>={}){
+ const s=await fixture(change);s.setExisting();s.disable();
+ const receipt={version:1,baselineHash:digest(s.baseline),target:{accountId:account,workerId:id,workerName:name,productionUrl:`https://${name}.example.workers.dev`},phase:'unverified',checkedAt:'2026-10-26T00:00:00.000Z',productionUnchanged:true,disabledConfirmed:false,restoredConfirmed:false};
+ await writeFile(join(isolated.root,'.reports/recovery-target.json'),JSON.stringify(receipt));
+ return {...s,receipt,saveReceipt:async()=>writeFile(join(isolated.root,'.reports/recovery-target.json'),JSON.stringify(receipt))};
 }
 afterEach(async()=>{const root=isolated.root;isolated.root='';if(root)await rm(root,{recursive:true,force:true});});
 function envelopes(request:typeof fetch,change:(value:Record<string,unknown>)=>void):typeof fetch{
@@ -66,6 +72,27 @@ it('accepts observed null errors on beta lists and successful recovery create/up
  const s=await fixture();
  await runRecoveryOperator(['--create-empty-rehearsal'],env,envelopes(s.request,value=>{value.errors=null;}));
  expect(await s.readReceipt()).toMatchObject({phase:'verified',disabledConfirmed:true,restoredConfirmed:true});
+});
+it('accepts observed multipart literal and settings omission only with explicit Worker observability disabled',async()=>{
+ const boundary='a'.repeat(60);
+ const s=await fixture({omitObservability:true,source:`--${boundary}\r\nContent-Disposition: form-data; name="index.js"\r\n\r\n${source}\r\n--${boundary}--\r\n`,sourceHeaders:{'content-type':`multipart/form-data; boundary=${boundary}`}});
+ await runRecoveryOperator(['--create-empty-rehearsal'],env,s.request);
+ expect(await s.readReceipt()).toMatchObject({phase:'verified',productionUnchanged:true});
+ expect(s.writes.map(w=>w.method)).toEqual(['POST','PUT','POST','POST','POST']);
+});
+it('allows omitted settings observability with the previous raw source envelope',async()=>{
+ const s=await fixture({omitObservability:true});await runRecoveryOperator(['--create-empty-rehearsal'],env,s.request);
+ expect(await s.readReceipt()).toMatchObject({phase:'verified',productionUnchanged:true});
+});
+it.each([undefined,null,{}, {enabled:true}, {enabled:'false'}])('rejects Worker observability %j despite settings omission',async observability=>{
+ const s=await fixture({omitObservability:true,worker:{observability}});
+ await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,s.request)).rejects.toThrow();
+ expect(s.writes.map(w=>w.method)).toEqual(['POST']);
+});
+it.each([null,{}, {enabled:true}, {enabled:'false'}])('rejects present unsafe settings observability %j',async observability=>{
+ const s=await fixture({scriptSettings:{observability}});
+ await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,s.request)).rejects.toThrow();
+ expect(s.writes.map(w=>w.method)).toEqual(['POST','PUT']);
 });
 it.each(['missing','undefined','string','number','object','nonempty','unsuccessful','http'] as const)('rejects malformed recovery envelope %s before writes',async kind=>{
  const s=await fixture();
@@ -105,14 +132,15 @@ it.each([{source:'\ufeff'+source},{scriptSettings:{assets:{}}},{scriptSettings:{
 it('does not restore when external withdrawal is generic after API disable',async()=>{
  const s=await fixture({disabledBody:'Not found'});await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,s.request)).rejects.toThrow();
  expect(s.writes.map(w=>w.method)).toEqual(['POST','PUT','POST','POST']);expect(s.writes[3].body).toEqual({enabled:false,previews_enabled:false});
- const receipt=await s.readReceipt();expect(receipt).toMatchObject({phase:'unverified',productionUnchanged:true,disabledConfirmed:false,restoredConfirmed:false});
+ const receipt=await s.readReceipt();expect(receipt).toMatchObject({phase:'rehearsal-intent',productionUnchanged:true,disabledConfirmed:false,restoredConfirmed:false});
+ const writes=s.writes.length;await expect(runRecoveryOperator(['--resume-owned-staged-rehearsal'],env,s.request)).rejects.toThrow();expect(s.writes).toHaveLength(writes);
 });
 it.each([1,2,3,4,5])('retains partial unverified state and never retries unknown write %s',async write=>{
  const s=await fixture({unknownWrite:write});await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,s.request)).rejects.toThrow('Recovery operation remains unverified');
- expect(s.writes).toHaveLength(write);const receipt=await s.readReceipt();expect(receipt.phase).toBe('unverified');expect(receipt.productionUnchanged).toBe(true);expect(receipt.disabledConfirmed).toBe(false);expect(receipt.restoredConfirmed).toBe(false);
+ expect(s.writes).toHaveLength(write);const receipt=await s.readReceipt();expect(receipt.phase).toBe(write<3?'unverified':write===3?'enable-intent':'rehearsal-intent');expect(receipt.productionUnchanged).toBe(true);expect(receipt.disabledConfirmed).toBe(false);expect(receipt.restoredConfirmed).toBe(false);
 });
 it('rejects settings drift after the final restore before issuing a recovery result',async()=>{
- const s=await fixture({configDrift:true});await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,s.request)).rejects.toThrow();expect((await s.readReceipt()).phase).toBe('unverified');
+ const s=await fixture({configDrift:true});await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,s.request)).rejects.toThrow();expect((await s.readReceipt()).phase).toBe('rehearsal-intent');
 });
 it.each([{drift:true},{postUnavailable:true}])('never claims unchanged production when post-read fails or drifts %j',async change=>{
  const s=await fixture(change);await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,s.request)).rejects.toThrow();expect((await s.readReceipt()).productionUnchanged).toBe(false);
@@ -122,12 +150,51 @@ it('existing mode reuses exact owned receipt without any create or source update
  await runRecoveryOperator(['--verify-existing-rehearsal'],env,s.request);
  expect(s.writes.map(w=>w.method)).toEqual(['POST','POST']);expect(s.writes.every(w=>w.path.endsWith('/'+name+'/subdomain'))).toBe(true);
 });
+it('explicitly resumes only a freshly proven disabled owned legacy stage, with no create/upload/delete',async()=>{
+ const boundary='c'.repeat(60);
+ const s=await stagedFixture({omitObservability:true,source:`--${boundary}\r\nContent-Disposition: form-data; name="index.js"\r\n\r\n${source}\r\n--${boundary}--\r\n`,sourceHeaders:{'content-type':`multipart/form-data; boundary=${boundary}`}});
+ const phases:string[]=[];
+ const request:typeof fetch=async(input,init)=>{if(init?.method==='POST')phases.push((await s.readReceipt()).phase);return s.request(input,init);};
+ await runRecoveryOperator(['--resume-owned-staged-rehearsal'],env,request);
+ expect(phases).toEqual(['staged-resume-intent','staged-resume-intent','staged-resume-intent']);
+ expect(s.writes).toEqual([true,false,true].map(enabled=>({method:'POST',path:`/accounts/${account}/workers/scripts/${name}/subdomain`,body:{enabled,previews_enabled:false}})));
+ expect(await s.readReceipt()).toMatchObject({phase:'verified',productionUnchanged:true,disabledConfirmed:true,restoredConfirmed:true});
+ expect(s.calls.some(p=>p.endsWith('/scripts/ajou-study-hub'))).toBe(false);
+});
+it.each(['create-intent','owned','upload-intent','enable-intent','rehearsal-intent','staged-resume-intent','verified','unknown'])('rejects non-legacy resume phase %s before writes',async phase=>{
+ const s=await stagedFixture();s.receipt.phase=phase;await s.saveReceipt();
+ await expect(runRecoveryOperator(['--resume-owned-staged-rehearsal'],env,s.request)).rejects.toThrow();expect(s.writes).toEqual([]);
+});
+it.each(['null','extra','id','name','url','account','baseline','production','disabled','restored','enabled','source','observability','config','ci','args'])('rejects staged resume %s before writes',async kind=>{
+ const s=await stagedFixture(kind==='source'?{source:'other'}:kind==='observability'?{worker:{observability:undefined},omitObservability:true}:kind==='config'?{scriptSettings:{bindings:[{type:'secret_text',name:'OTHER'}]}}:{});
+ if(kind==='null')(s.receipt as {target:unknown}).target=null;
+ if(kind==='extra')(s.receipt as Record<string,unknown>).approved=true;
+ if(kind==='id')s.receipt.target.workerId='production-id';
+ if(kind==='name')s.receipt.target.workerName='ajou-study-hub';
+ if(kind==='url')s.receipt.target.productionUrl='https://other.example.workers.dev';
+ if(kind==='account')s.receipt.target.accountId='b'.repeat(32);
+ if(kind==='baseline')s.receipt.baselineHash='c'.repeat(64);
+ if(kind==='production')s.receipt.productionUnchanged=false;
+ if(kind==='disabled')s.receipt.disabledConfirmed=true;
+ if(kind==='restored')s.receipt.restoredConfirmed=true;
+ if(kind==='enabled')s.setExisting();
+ await s.saveReceipt();
+ await expect(runRecoveryOperator(kind==='args'?['--resume-owned-staged-rehearsal',id]:['--resume-owned-staged-rehearsal'],kind==='ci'?{...env,CI:'true'}:env,s.request)).rejects.toThrow();
+ expect(s.writes).toEqual([]);
+});
+it.each([1,2,3])('retains a non-resumable intent after unknown staged-resume write %s',async unknownWrite=>{
+ const s=await stagedFixture({unknownWrite});
+ await expect(runRecoveryOperator(['--resume-owned-staged-rehearsal'],env,s.request)).rejects.toThrow();
+ expect(s.writes).toHaveLength(unknownWrite);expect(await s.readReceipt()).toMatchObject({phase:'staged-resume-intent',productionUnchanged:true,disabledConfirmed:false,restoredConfirmed:false});
+ const writes=s.writes.length;
+ await expect(runRecoveryOperator(['--resume-owned-staged-rehearsal'],env,s.request)).rejects.toThrow();expect(s.writes).toHaveLength(writes);
+});
 it.each(['missing','extra','id','account','baseline','disabled'])('existing mode rejects %s before writes',async kind=>{
  const s=await fixture();if(kind!=='missing')await runRecoveryOperator(['--create-empty-rehearsal'],env,s.request);
  if(kind!=='missing'&&kind!=='disabled'){const r=await s.readReceipt();if(kind==='extra')r.approved=true;if(kind==='id')r.target.workerId='production-id';if(kind==='account')r.target.accountId='b'.repeat(32);if(kind==='baseline')r.baselineHash='c'.repeat(64);await writeFile(join(isolated.root,'.reports/recovery-target.json'),JSON.stringify(r));}
  if(kind==='disabled')s.disable();s.writes.length=0;
  await expect(runRecoveryOperator(['--verify-existing-rehearsal'],env,s.request)).rejects.toThrow();expect(s.writes).toEqual([]);
-  if(kind==='disabled')expect((await s.readReceipt()).phase).toBe('unverified');
+  if(kind==='disabled')expect((await s.readReceipt()).phase).toBe('rehearsal-intent');
 });
 it('does not recreate after a locally recorded unknown creation outcome',async()=>{
  const s=await fixture({unknownWrite:1});await expect(runRecoveryOperator(['--create-empty-rehearsal'],env,s.request)).rejects.toThrow();s.writes.length=0;

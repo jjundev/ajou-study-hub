@@ -8,9 +8,10 @@ import { assertAutomationAllowed, validateBaseline, type AutomationBaseline } fr
 import { digest, exactKeys, isRecord, readAccessInspection, type AccessInspection } from './access-policy.js';
 import { readCloudflareList } from './cloudflare-list.js';
 import { rehearseRecovery, type RecoveryTarget } from './emergency-disable.js';
+import { assertRecoverySource, recoverySource as source, recoverySourceLimit } from './recovery-source.js';
 
-const name='ajou-study-hub-recovery-test',source='export default {fetch(){return new Response("recovery-test");}};';
-const phases=['create-intent','owned','upload-intent','enable-intent','rehearsal-intent','verified','unverified'] as const;
+const name='ajou-study-hub-recovery-test';
+const phases=['create-intent','owned','upload-intent','enable-intent','rehearsal-intent','staged-resume-intent','verified','unverified'] as const;
 type Receipt={version:1;baselineHash:string;target:RecoveryTarget|null;phase:typeof phases[number];checkedAt:string;productionUnchanged:boolean;disabledConfirmed:boolean;restoredConfirmed:boolean};
 function fail():never{throw Error('Recovery operation remains unverified');}
 const identity=(v:unknown):v is string=>typeof v==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(v);
@@ -25,7 +26,12 @@ async function readJson(path:string):Promise<unknown>{
 function owned(value:unknown,settings:DeploymentSettings,baseline:AutomationBaseline,url:string):asserts value is Receipt{
  exactKeys(value,['version','baselineHash','target','phase','checkedAt','productionUnchanged','disabledConfirmed','restoredConfirmed']);
  exactKeys(value.target,['accountId','workerId','workerName','productionUrl']);const t=value.target;
- if(value.version!==1||value.baselineHash!==digest(baseline)||!phases.includes(value.phase as Receipt['phase'])||value.phase==='create-intent'||typeof value.checkedAt!=='string'||!Number.isFinite(Date.parse(value.checkedAt))||new Date(value.checkedAt).toISOString()!==value.checkedAt||![value.productionUnchanged,value.disabledConfirmed,value.restoredConfirmed].every(v=>typeof v==='boolean')||t.accountId!==settings.accountId||t.workerName!==name||!identity(t.workerId)||t.workerId===baseline.workerId||t.workerId===name||t.productionUrl!==url)fail();
+ if(value.version!==1||value.baselineHash!==digest(baseline)||
+  !phases.includes(value.phase as Receipt['phase'])||value.phase==='create-intent'||
+  typeof value.checkedAt!=='string'||!Number.isFinite(Date.parse(value.checkedAt))||new Date(value.checkedAt).toISOString()!==value.checkedAt||
+  ![value.productionUnchanged,value.disabledConfirmed,value.restoredConfirmed].every(v=>typeof v==='boolean')||
+  t.accountId!==settings.accountId||t.workerName!==name||!identity(t.workerId)||
+  t.workerId===baseline.workerId||t.workerId===name||t.productionUrl!==url)fail();
 }
 /** Per-attempt HTTP boundary: bounded responses, fixed write allowlist, no retries or credential forwarding. */
 function http(request:typeof fetch,account:string,url:string){
@@ -38,16 +44,17 @@ function http(request:typeof fetch,account:string,url:string){
   }else if(u.origin!==url||method!=='GET'||new Headers(init?.headers).has('Authorization')||new Headers(init?.headers).has('Cookie')||init?.credentials!=='omit')fail();
   const r=await request(input,{...init,redirect:'error',signal,credentials:'omit'});
   if(r.redirected||r.status>=300&&r.status<400||r.headers.has('location'))fail();
-  const length=r.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>1048576))fail();
+  const limit=method==='GET'&&path===script?recoverySourceLimit:1048576;
+  const length=r.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>limit))fail();
   const reader=r.body?.getReader(),chunks:Uint8Array[]=[];let size=0;
-  if(reader)try{for(;;){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.length;if(size>1048576)fail();chunks.push(chunk.value);}}finally{await reader.cancel();}
+  if(reader)try{for(;;){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.length;if(size>limit)fail();chunks.push(chunk.value);}}finally{await reader.cancel();}
   return new Response(Buffer.concat(chunks),{status:r.status,headers:r.headers});
  };
  return {bounded,base,script};
 }
 /** Explicit local operator command. It cannot create an AutomationReadiness or touch production writes. */
 export async function runRecoveryOperator(args:string[],env:NodeJS.ProcessEnv,request:typeof fetch=fetch):Promise<void>{
- if(env.CI||args.length!==1||!['--create-empty-rehearsal','--verify-existing-rehearsal'].includes(args[0]!)||!env.CLOUDFLARE_API_TOKEN||/[\r\n]/.test(env.CLOUDFLARE_API_TOKEN))fail();
+ if(env.CI||args.length!==1||!['--create-empty-rehearsal','--verify-existing-rehearsal','--resume-owned-staged-rehearsal'].includes(args[0]!)||!env.CLOUDFLARE_API_TOKEN||/[\r\n]/.test(env.CLOUDFLARE_API_TOKEN))fail();
  const token=env.CLOUDFLARE_API_TOKEN,root=await verificationProject(),dist=resolve(root,'dist'),receiptPath=resolve(root,'.reports/recovery-target.json'),resultPath=resolve(root,'.reports/recovery-result.json'),lockPath=resolve(root,'.reports/recovery-operation.lock');
  await mkdir(resolve(root,'.reports'),{recursive:true});
  for(const path of [receiptPath,resultPath,lockPath])await validateReportPath(path,[dist],root);
@@ -71,16 +78,26 @@ export async function runRecoveryOperator(args:string[],env:NodeJS.ProcessEnv,re
    const workers=await readCloudflareList(api,c.base+'/workers/workers'),matching=workers.filter(w=>w.name===name);
    if(matching.length!==1||matching[0].id!==target.workerId)fail();
    const worker=(await api(c.base+'/workers/workers/'+encodeURIComponent(target.workerId))).result;
-   if(!isRecord(worker)||worker.id!==target.workerId||worker.name!==name||worker.logpush!==false||!isRecord(worker.observability)||worker.observability.enabled!==false||!Array.isArray(worker.tail_consumers)||worker.tail_consumers.length||!isRecord(worker.references)||!Array.isArray(worker.references.domains)||Object.values(worker.references).some(v=>!Array.isArray(v)||v.length))fail();
+   if(!isRecord(worker)||worker.id!==target.workerId||worker.name!==name||worker.logpush!==false||
+    !isRecord(worker.observability)||worker.observability.enabled!==false||
+    !Array.isArray(worker.tail_consumers)||worker.tail_consumers.length||
+    !isRecord(worker.references)||!Array.isArray(worker.references.domains)||
+    Object.values(worker.references).some(v=>!Array.isArray(v)||v.length))fail();
    const sub=(await api(c.script+'/subdomain')).result;if(!isRecord(sub)||sub.enabled!==enabled||sub.previews_enabled!==false)fail();
    const subdomain=(await api(c.base+'/workers/subdomain')).result;if(!isRecord(subdomain)||url!==`https://${name}.${subdomain.subdomain}.workers.dev`)fail();
    const zones=await readCloudflareList(api,'/zones?account.id='+target.accountId);
    for(const zone of zones){if(typeof zone.id!=='string'||!/^[a-f0-9]{32}$/.test(zone.id))fail();if((await readCloudflareList(api,'/zones/'+zone.id+'/workers/routes','single')).some(r=>r.script===name))fail();}
    if(withSource){
     const config=(await api(c.script+'/settings')).result;
-    if(!isRecord(config)||config.compatibility_date!=='2026-10-24'||!Array.isArray(config.bindings)||config.bindings.length||Object.hasOwn(config,'assets')||config.logpush!==false||!isRecord(config.observability)||config.observability.enabled!==false||!Array.isArray(config.tail_consumers)||config.tail_consumers.length||config.compatibility_flags!==undefined&&(!Array.isArray(config.compatibility_flags)||config.compatibility_flags.length))fail();
+    // The immutable Worker read above must explicitly prove observability disabled in this check.
+    // Settings may omit the field, but a present value never overrides that proof.
+    if(!isRecord(config)||config.compatibility_date!=='2026-10-24'||
+     !Array.isArray(config.bindings)||config.bindings.length||Object.hasOwn(config,'assets')||config.logpush!==false||
+     Object.hasOwn(config,'observability')&&(!isRecord(config.observability)||config.observability.enabled!==false)||
+     !Array.isArray(config.tail_consumers)||config.tail_consumers.length||
+     config.compatibility_flags!==undefined&&(!Array.isArray(config.compatibility_flags)||config.compatibility_flags.length))fail();
     const raw=await request('https://api.cloudflare.com/client/v4'+c.script,{headers:{Authorization:'Bearer '+token}});
-    if(!raw.ok||raw.headers.get('content-type')!=='application/javascript'||raw.headers.get('content-disposition')!=='attachment; filename="index.js"'||!Buffer.from(await raw.arrayBuffer()).equals(Buffer.from(source)))fail();
+    await assertRecoverySource(raw);
    }
   };
   if(args[0]==='--create-empty-rehearsal'){
@@ -96,12 +113,24 @@ export async function runRecoveryOperator(args:string[],env:NodeJS.ProcessEnv,re
    receipt.phase='upload-intent';await persist();await api(c.script,'PUT',form);await verifyOwned(receipt.target,false,true);
    receipt.phase='enable-intent';await persist();await api(c.script+'/subdomain','POST',{enabled:true,previews_enabled:false});
   }else{
-   const value=await readJson(receiptPath);owned(value,settings,baseline,url);receipt=value;attempted=true;
-   receipt.disabledConfirmed=false;receipt.restoredConfirmed=false;receipt.productionUnchanged=false;receipt.phase='unverified';await persist();
-   // A disabled/partial resource is never automatically enabled, repaired or reuploaded.
-   await verifyOwned(receipt.target!,true,true);
+   const value=await readJson(receiptPath);owned(value,settings,baseline,url);
+   if(args[0]==='--resume-owned-staged-rehearsal'){
+    // Only the legacy failed-staging shape is eligible for this explicit reconciliation.
+    if(value.phase!=='unverified'||value.productionUnchanged!==true||value.disabledConfirmed!==false||value.restoredConfirmed!==false)fail();
+    receipt=value;attempted=true;
+    await verifyOwned(receipt.target!,false,true);
+    // Retain this non-resumable marker through every subsequent failure or unknown write.
+    receipt.phase='staged-resume-intent';receipt.productionUnchanged=false;await persist();
+    await api(c.script+'/subdomain','POST',{enabled:true,previews_enabled:false});
+   }else{
+    receipt=value;attempted=true;
+    receipt.disabledConfirmed=false;receipt.restoredConfirmed=false;receipt.productionUnchanged=false;receipt.phase='rehearsal-intent';await persist();
+    // Existing verification remains enabled-only, with no stage repair or initial enable.
+    await verifyOwned(receipt.target!,true,true);
+   }
   }
-  receipt.phase='rehearsal-intent';receipt.disabledConfirmed=false;receipt.restoredConfirmed=false;receipt.productionUnchanged=false;await persist();
+  if(receipt.phase!=='staged-resume-intent')receipt.phase='rehearsal-intent';
+  receipt.disabledConfirmed=false;receipt.restoredConfirmed=false;receipt.productionUnchanged=false;await persist();
   const result=await rehearseRecovery(receipt.target!,request,token);
   await verifyOwned(receipt.target!,true,true);
   receipt.disabledConfirmed=result.disabledConfirmed;receipt.restoredConfirmed=result.restoredConfirmed;success=true;
@@ -109,7 +138,11 @@ export async function runRecoveryOperator(args:string[],env:NodeJS.ProcessEnv,re
  finally{
   if(before&&settings&&baseline)try{const after=await readAccessInspection(settings,{fetch:request,token});assertAutomationAllowed(settings,after,baseline);productionUnchanged=digest(after)===digest(before);}catch{productionUnchanged=false;}
   try{
-   if(receipt&&attempted){receipt.phase=success&&productionUnchanged?'verified':'unverified';receipt.productionUnchanged=productionUnchanged;receipt.checkedAt=new Date().toISOString();await persist();}
+   if(receipt&&attempted){
+    if(success&&productionUnchanged)receipt.phase='verified';
+    else if(!['enable-intent','rehearsal-intent','staged-resume-intent'].includes(receipt.phase))receipt.phase='unverified';
+    receipt.productionUnchanged=productionUnchanged;receipt.checkedAt=new Date().toISOString();await persist();
+   }
    await writeReport({verified:success&&productionUnchanged,productionUnchanged,code:success&&productionUnchanged?'RECOVERY_VERIFIED':'RECOVERY_UNVERIFIED'},resultPath,[dist],root);
   }finally{await lock.close();await unlink(lockPath);}
  }
