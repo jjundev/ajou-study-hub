@@ -150,5 +150,30 @@ test('real bind CLI preserves success JSON and contains a raw Git status failure
  expect(snapshot.revisions).toEqual(revisions);expect(snapshot.inputFingerprint).toMatch(/^[a-f0-9]{64}$/);
  await writeFile(join(revisions[0]!.root,'.git/index'),'private-corrupt-index-TOKEN');
  const failure=invoke();expect(failure.status).toBe(1);expect(failure.stdout).toBe('');
- expect(failure.stderr).toBe('{"code":"CI_BIND_STATUS_FAILED","courseId":"logic-lab"}\n');
+ expect(failure.stderr).toBe('{"code":"CI_BIND_STATUS_FAILED","courseId":"logic-lab","gitFailure":"index","gitExitCode":128}\n');
+});
+
+test('status command diagnostics contain required-filter stderr and private paths',async()=>{
+ const {project,revisions}=await fixture();
+ const root=revisions[0]!.root;
+ // Force a deterministic required clean-filter failure during status inspection.
+ await writeFile(join(root,'.gitattributes'),'README.md filter=private-TOKEN\n');
+ git(root,'add','.gitattributes');git(root,'commit','--quiet','-m','attributes');
+ revisions[0]!.sha=git(root,'rev-parse','HEAD');
+ git(root,'config','filter.private-TOKEN.clean','private-TOKEN-command');
+ git(root,'config','filter.private-TOKEN.required','true');
+ await writeFile(join(root,'README.md'),'SOURCE\n');
+ let failure:unknown;try{await bindSources(project,appSha,revisions);}catch(error){failure=error;}
+ const output=formatSourceOperationDiagnostic(failure);
+ expect(JSON.parse(output)).toEqual({code:'CI_BIND_STATUS_FAILED',courseId:'logic-lab',gitFailure:'filter',gitExitCode:128});
+ expect(output).not.toContain('private');expect(output).not.toContain(root);
+});
+
+test('unknown status stderr becomes other without exposing config values',async()=>{
+ const {project,revisions}=await fixture(),root=revisions[0]!.root;
+ git(root,'config','diff.ignoreSubmodules','private-TOKEN');
+ let failure:unknown;try{await bindSources(project,appSha,revisions);}catch(error){failure=error;}
+ const output=formatSourceOperationDiagnostic(failure);
+ expect(JSON.parse(output)).toEqual({code:'CI_BIND_STATUS_FAILED',courseId:'logic-lab',gitFailure:'other',gitExitCode:128});
+ expect(output).not.toContain('private');expect(output).not.toContain(root);
 });

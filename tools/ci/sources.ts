@@ -9,7 +9,7 @@ export type Revision = {courseId:string; repository:string; sha:string; root:str
 export type SourceSnapshot = {version:1; appSha:string; revisions:Revision[]; inputFingerprint:string; settingsPath:string};
 const sourceCodes=['CI_SOURCE_OPERATION_FAILED','CI_SOURCE_COMMAND_INVALID','CI_BIND_INPUT_FAILED','CI_BIND_APP_SHA_INVALID','CI_BIND_REVISIONS_INVALID','CI_BIND_PROJECT_ROOT_FAILED','CI_BIND_ROOT_FAILED','CI_BIND_ROOT_OVERLAP','CI_BIND_ORIGIN_FAILED','CI_BIND_HEAD_FAILED','CI_BIND_STATUS_FAILED','CI_BIND_SOURCE_DIRTY','CI_BIND_OUTPUT_FAILED','CI_BIND_INSPECTION_FAILED','CI_BIND_PROVENANCE_FAILED'] as const;
 type BindCode=typeof sourceCodes[number];
-type SafeDiagnostic={code:BindCode;courseId?:string};
+type SafeDiagnostic={code:BindCode;courseId?:string;gitFailure?:'buffer-limit'|'promisor-fetch'|'credentials'|'index'|'filter'|'submodule'|'spawn'|'other';gitExitCode?:number};
 const diagnostics=new WeakMap<object,SafeDiagnostic>();
 export class SourceBindError extends Error {
  readonly safeCode:BindCode;
@@ -37,6 +37,24 @@ const contains=(root:string,path:string)=>{const rel=relative(root,path);return 
 async function git(root:string,...args:string[]){
  try{return (await exec('git',args,{cwd:root,encoding:'utf8',maxBuffer:20*1024*1024})).stdout.trim();}
  catch{throw Error('Cannot inspect source repository');}
+}
+/** Status failures retain only fixed categories and a bounded numeric exit code, never stderr. */
+async function gitStatus(root:string,courseId:string){
+ try{return (await exec('git',['status','--porcelain','--untracked-files=all'],{cwd:root,encoding:'utf8',maxBuffer:20*1024*1024})).stdout.trim();}
+ catch(error){
+  const failure=new SourceBindError('CI_BIND_STATUS_FAILED','Cannot inspect source repository',courseId);
+  const child=error as {code?:unknown;stderr?:unknown},stderr=typeof child?.stderr==='string'?child.stderr:'';
+  const gitFailure:SafeDiagnostic['gitFailure']=child?.code==='ERR_CHILD_PROCESS_STDIO_MAXBUFFER'?'buffer-limit'
+   :/could not fetch .* from promisor remote|unable to fetch .* from promisor remote/i.test(stderr)?'promisor-fetch'
+   :/could not read Username|could not read Password|terminal prompts disabled|Authentication failed/i.test(stderr)?'credentials'
+   :/index file corrupt|index file smaller than expected|bad signature|invalid index/i.test(stderr)?'index'
+   :/clean filter .* failed|external filter .* failed|smudge filter .* failed/i.test(stderr)?'filter'
+   :/no submodule mapping found|no url found for submodule/i.test(stderr)?'submodule'
+   :child?.code==='ENOENT'||child?.code==='EACCES'?'spawn':'other';
+  const gitExitCode=typeof child?.code==='number'&&Number.isInteger(child.code)&&child.code>=0&&child.code<=255?child.code:undefined;
+  diagnostics.set(failure,{code:'CI_BIND_STATUS_FAILED',courseId:failure.courseId,gitFailure,...(gitExitCode===undefined?{}:{gitExitCode})});
+  throw failure;
+ }
 }
 export async function resolveRevisions(request:typeof fetch,token:string):Promise<Omit<Revision,'root'>[]>{
  if(!token.trim())throw Error('Source read token required');
@@ -87,7 +105,7 @@ export async function bindSources(project:string,appSha:string,revisions:Revisio
    if(![`https://github.com/${revision.repository}`,`https://github.com/${revision.repository}.git`,`git@github.com:${revision.repository}`,`git@github.com:${revision.repository}.git`].includes(origin))throw Error();
   });
   await bindingStage('CI_BIND_HEAD_FAILED','Source is dirty or HEAD moved',revision.courseId,async()=>{if(await git(root,'rev-parse','HEAD')!==revision.sha)throw Error();});
-  const status=await bindingStage('CI_BIND_STATUS_FAILED','Cannot inspect source repository',revision.courseId,()=>git(root,'status','--porcelain','--untracked-files=all'));
+  const status=await gitStatus(root,revision.courseId);
   if(status)throw new SourceBindError('CI_BIND_SOURCE_DIRTY','Source is dirty or HEAD moved',revision.courseId);
   roots.add(root);revision.root=root;
  }
