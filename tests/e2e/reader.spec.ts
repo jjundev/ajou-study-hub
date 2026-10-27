@@ -297,6 +297,7 @@ test('native assign adds one route and native replace replaces that route', asyn
  expect(await page.evaluate(() => history.length)).toBe(before+1);
  await page.reload(); await expect(page.frameLocator('iframe').locator('#mode')).toHaveText('기본 본문');
  await page.goBack(); await expect(page).toHaveURL(/doc-a$/);
+ await expect(page.frameLocator('iframe').getByRole('heading',{name:'A',exact:true})).toBeVisible();
  await page.goForward(); await expect(page.frameLocator('iframe').locator('#mode')).toHaveText('기본 본문');
 });
 
