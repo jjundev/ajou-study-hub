@@ -63,6 +63,8 @@ test('rejects surviving browser, reparented service, and workspace child without
   {pid:22,ppid:1,uid:1000,cwd:'/runner/app/dist',executable:'/bin/sh'},
  ]) expect(()=>assertNoRelevantProcesses([self,process],10,1000,'/runner/app')).toThrow('BOUNDARY_LIVE_PROCESS');
  expect(()=>assertNoRelevantProcesses([self],10,1000,'/runner/app')).not.toThrow();
+ expect(()=>assertNoRelevantProcesses([self,{pid:1,ppid:0,uid:1000,cwd:'/runner/app',executable:'/usr/bin/node'}],10,1000,'/runner/app')).not.toThrow();
+ expect(()=>assertNoRelevantProcesses([self,{pid:23,ppid:10,uid:1000,cwd:'/tmp',executable:'/bin/sh'}],10,1000,'/runner/app')).toThrow('BOUNDARY_LIVE_PROCESS');
 });
 test('missing process inspection evidence fails closed',()=>{
  expect(()=>assertNoRelevantProcesses([],10,1000,'/runner/app')).toThrow('BOUNDARY_PROCESS_UNREADABLE');
@@ -105,4 +107,29 @@ test('Linux process scan still skips disappearing and other-user entries',async(
   await writeFile(join(root,'124','status'),'Uid:\t2000 0 0 0\nPPid:\t1\n');
   await expect(linuxProcesses(root,1000)).resolves.toEqual([]);
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('Linux process scan exempts only proper ancestors before unreadable cwd inspection',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'hub-proc-ancestors-'));
+ const links=vi.fn(async(path:unknown)=>{
+  if(String(path).includes(join(root,'20')))throw Object.assign(Error('private-denied-TOKEN'),{code:'EACCES'});
+  return '/tmp';
+ });
+ try{
+  vi.resetModules();
+  vi.doMock('node:fs/promises',async()=>({...await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'),readlink:links}));
+  const {linuxProcesses:scan}=await import('../../tools/ci/process-boundary.js');
+  for(const [pid,ppid] of [[10,20],[20,30],[30,1]]){
+   await mkdir(join(root,String(pid)));
+   await writeFile(join(root,String(pid),'status'),'Uid:\t1000 1000 1000 1000\nPPid:\t'+ppid+'\n');
+  }
+  const rows=await scan(root,1000,10);
+  expect(rows).toEqual([{pid:10,ppid:20,uid:1000,cwd:'/tmp',executable:'/tmp'}]);
+  expect(links.mock.calls.map(([path])=>String(path))).toEqual([join(root,'10','cwd'),join(root,'10','exe')]);
+  // The very same denied process is not exempt when it is outside our ancestor chain.
+  await writeFile(join(root,'10','status'),'Uid:\t1000 1000 1000 1000\nPPid:\t1\n');
+  await expect(scan(root,1000,10)).rejects.toThrow(/^BOUNDARY_PROCESS_CWD_EACCES_UID_ALL_MATCH$/);
+  links.mockImplementation(async()=>{throw Object.assign(Error('private-self-denied-TOKEN'),{code:'EACCES'});});
+  await expect(scan(root,1000,10)).rejects.toThrow(/^BOUNDARY_PROCESS_CWD_EACCES_UID_ALL_MATCH$/);
+ }finally{vi.doUnmock('node:fs/promises');vi.resetModules();await rm(root,{recursive:true,force:true});}
 });

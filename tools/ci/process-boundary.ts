@@ -50,21 +50,27 @@ export async function captureTrustedFiles(project:string):Promise<Record<string,
  return result;
 }
 export type ProcessMetadata={pid:number;ppid:number;uid:number;cwd:string;executable:string};
+function ancestorPids(rows:Pick<ProcessMetadata,'pid'|'ppid'>[],self:number):Set<number> {
+ const ancestors=new Set<number>();let cursor=self;
+ while(cursor&&!ancestors.has(cursor)){ancestors.add(cursor);cursor=rows.find(p=>p.pid===cursor)?.ppid??0;}
+ return ancestors;
+}
 /** Metadata only: no command arguments, environment, or process termination. */
 export function assertNoRelevantProcesses(rows:ProcessMetadata[],self:number,uid:number,project:string):void {
  if(!rows.some(row=>row.pid===self&&row.uid===uid))throw Error('BOUNDARY_PROCESS_UNREADABLE');
- const ancestors=new Set<number>();let cursor=self;
- while(cursor&&!ancestors.has(cursor)){ancestors.add(cursor);cursor=rows.find(p=>p.pid===cursor)?.ppid??0;}
+ const ancestors=ancestorPids(rows,self);
  for(const row of rows){
   if(row.uid!==uid||ancestors.has(row.pid))continue;
   const relevant=inside(project,row.cwd)||/^(?:node|nodejs|chrome|chromium|firefox|webkit.*|MiniBrowser|WebKit.*|esbuild|workerd|vite|wrangler)(?:[.-].*)?$/.test(basename(row.executable));
   if(relevant||ancestors.has(row.ppid)&&row.ppid===self)throw Error('BOUNDARY_LIVE_PROCESS');
  }
 }
-export async function linuxProcesses(procRoot='/proc',ownUid=process.getuid?.()):Promise<ProcessMetadata[]> {
+export async function linuxProcesses(procRoot='/proc',ownUid=process.getuid?.(),self=process.pid):Promise<ProcessMetadata[]> {
  const rows:ProcessMetadata[]=[];
  let stage:'LIST'|'STATUS'|'FIELDS'|'CWD'|'EXE'='LIST';
- let uidRole:'ALL_MATCH'|'EFFECTIVE_OTHER'|'SAVED_OR_FS_OTHER'|'UNKNOWN'='UNKNOWN';
+ type UidRole='ALL_MATCH'|'EFFECTIVE_OTHER'|'SAVED_OR_FS_OTHER'|'UNKNOWN';
+ let uidRole:UidRole='UNKNOWN';
+ const identities:(Pick<ProcessMetadata,'pid'|'ppid'|'uid'>&{uidRole:UidRole})[]=[];
  try {
   for(const entry of await readdir(procRoot)){
    if(!/^\d+$/.test(entry))continue;
@@ -75,14 +81,22 @@ export async function linuxProcesses(procRoot='/proc',ownUid=process.getuid?.())
     const uid=Number(/^Uid:\s+(\d+)/m.exec(status)?.[1]);
     const ppid=Number(/^PPid:\s+(\d+)/m.exec(status)?.[1]);
     if(!Number.isSafeInteger(uid)||!Number.isSafeInteger(ppid))throw Error('invalid');
-    // Other users cannot be workload children; never inspect their executable/cwd.
-    if(uid!==ownUid)continue;
     // Diagnostic only: retain real-UID selection and every existing denial.
     const roles=/^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(status)?.slice(1).map(Number);
     uidRole=!roles?.every(Number.isSafeInteger)?'UNKNOWN':roles[1]!==ownUid?'EFFECTIVE_OTHER':roles.slice(2).some(value=>value!==ownUid)?'SAVED_OR_FS_OTHER':'ALL_MATCH';
-    stage='CWD';const cwd=await readlink(resolve(procRoot,entry,'cwd'));
-    stage='EXE';const executable=await readlink(resolve(procRoot,entry,'exe'));
-    rows.push({pid:Number(entry),ppid,uid,cwd,executable});
+    identities.push({pid:Number(entry),ppid,uid,uidRole});
+   } catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+  }
+  // Resolve the existing ancestor exemption before protected cwd/exe reads.
+  // Keep self readable and fail on every unknown non-ancestor denial.
+  const ancestors=ancestorPids(identities,self);
+  for(const identity of identities){
+   if(identity.uid!==ownUid||identity.pid!==self&&ancestors.has(identity.pid))continue;
+   uidRole=identity.uidRole;
+   try{
+    stage='CWD';const cwd=await readlink(resolve(procRoot,String(identity.pid),'cwd'));
+    stage='EXE';const executable=await readlink(resolve(procRoot,String(identity.pid),'exe'));
+    rows.push({pid:identity.pid,ppid:identity.ppid,uid:identity.uid,cwd,executable});
    } catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
   }
  } catch(error){
