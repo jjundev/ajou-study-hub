@@ -8,6 +8,8 @@ function fail():never{throw Error('CI_SOURCE_GIT_UNSAFE');}
 /** Fresh job-scoped Git configuration; never edits machine/user config or persistent hooksPath. */
 export async function prepareSourceGit(project:string,temp:string,output:string,env:NodeJS.ProcessEnv=process.env):Promise<void>{
  try{
+  // Even disabled or file-target tracing controls must not reach Reader-authenticated Git.
+  if(Object.keys(env).some(key=>/^(?:GIT_TRACE|GIT_CURL_VERBOSE$)/i.test(key)))fail();
   if([project,temp,output].some(value=>!value||/[\r\n\0]/.test(value))||Object.keys(env).some(key=>/^(?:GIT_CONFIG_(?:COUNT|PARAMETERS|KEY_\d+|VALUE_\d+)|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ASKPASS|SSH_ASKPASS|GIT_EXTERNAL_DIFF|GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_COMMON_DIR|GIT_CONFIG|GIT_ATTR_SOURCE)$/.test(key)&&env[key]!==undefined))fail();
   const root=await realpath(project),directory=await realpath(temp);
   try{await lstat(resolve(root,'../sources'));fail();}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
