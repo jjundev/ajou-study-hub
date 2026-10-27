@@ -1,10 +1,10 @@
-import { mkdtemp, writeFile, mkdir, rm, unlink } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, rm, unlink, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { expect, test, vi } from 'vitest';
-import { assertCleanBoundary, captureTrustedFiles, assertNoRelevantProcesses } from '../../tools/ci/process-boundary.js';
+import { assertCleanBoundary, captureTrustedFiles, assertNoRelevantProcesses, linuxProcesses } from '../../tools/ci/process-boundary.js';
 const exec = promisify(execFile);
 async function fixture(run:(root:string)=>Promise<void>) {
  const root=await mkdtemp(join(tmpdir(),'hub-boundary-'));
@@ -73,4 +73,31 @@ test('unsupported platform fails closed even with a clean synthetic checkout',as
   const baseline=await captureTrustedFiles(root);
   await expect(assertCleanBoundary(root,baseline)).rejects.toThrow('BOUNDARY_UNSUPPORTED_PLATFORM');
  });
+});
+
+test('Linux process failures expose only fixed stage and errno without process paths',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'private-TOKEN-proc-'));
+ try{
+  const pid=join(root,'123');await mkdir(pid);
+  await expect(linuxProcesses(join(root,'private-missing'),1000)).rejects.toThrow(/^BOUNDARY_PROCESS_LIST_ENOENT$/);
+  await writeFile(join(pid,'status'),'private-invalid-TOKEN');
+  await expect(linuxProcesses(root,1000)).rejects.toThrow(/^BOUNDARY_PROCESS_FIELDS_UNKNOWN$/);
+  await writeFile(join(pid,'status'),'Uid:\t1000 1000 1000 1000\nPPid:\t1\n');
+  await writeFile(join(pid,'cwd'),'private-not-a-link-TOKEN');
+  await expect(linuxProcesses(root,1000)).rejects.toThrow(/^BOUNDARY_PROCESS_CWD_EINVAL$/);
+  await unlink(join(pid,'cwd'));
+  await symlink(root,join(pid,'cwd'),process.platform==='win32'?'junction':'dir');
+  await writeFile(join(pid,'exe'),'private-not-a-link-TOKEN');
+  await expect(linuxProcesses(root,1000)).rejects.toThrow(/^BOUNDARY_PROCESS_EXE_EINVAL$/);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('Linux process scan still skips disappearing and other-user entries',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'hub-proc-'));
+ try{
+  await mkdir(join(root,'123')); // No status: process disappeared after directory enumeration.
+  await mkdir(join(root,'124'));
+  await writeFile(join(root,'124','status'),'Uid:\t2000 0 0 0\nPPid:\t1\n');
+  await expect(linuxProcesses(root,1000)).resolves.toEqual([]);
+ }finally{await rm(root,{recursive:true,force:true});}
 });

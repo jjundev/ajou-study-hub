@@ -75,6 +75,19 @@ test('source allowlist guard rejects shell payloads and non-verify modes before 
  }
  expect(steps.indexOf(guard)).toBeLessThan(steps.findIndex((s:any)=>s.id==='reader'));
 });
+
+test('process metadata probes run before Reader and after synthetic tests before material build',async()=>{
+ const steps=(await load()).jobs.verify.steps;
+ const before=steps.findIndex((s:any)=>s.id==='process-probe'),after=steps.findIndex((s:any)=>s.id==='post-test-process-probe');
+ expect(before).toBeGreaterThan(steps.findIndex((s:any)=>s.name?.startsWith('Record trusted checkout')));
+ expect(before).toBeLessThan(steps.findIndex((s:any)=>s.id==='reader'));
+ expect(after).toBe(steps.findIndex((s:any)=>s.name==='Typecheck and synthetic tests')+1);
+ expect(after).toBeLessThan(steps.findIndex((s:any)=>s.name==='Build and verify the same pinned material checkout'));
+ for(const index of [before,after]){
+  expect(steps[index].run).toBe('node tools/ci/process-boundary.ts probe-processes');
+  expect(steps[index].env).toBeUndefined();
+ }
+});
 test('Reader revocation rejects API errors without exposing credential or response',async()=>{
  const step=(await load()).jobs.verify.steps.find((s:any)=>s.id==='revoke-reader');
  const script=step.run.split("<<'NODE'\n")[1].replace(/\nNODE\n?$/,'').replace('(async()=>{','return (async()=>{');

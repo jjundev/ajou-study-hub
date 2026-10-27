@@ -61,22 +61,31 @@ export function assertNoRelevantProcesses(rows:ProcessMetadata[],self:number,uid
   if(relevant||ancestors.has(row.ppid)&&row.ppid===self)throw Error('BOUNDARY_LIVE_PROCESS');
  }
 }
-async function linuxProcesses():Promise<ProcessMetadata[]> {
+export async function linuxProcesses(procRoot='/proc',ownUid=process.getuid?.()):Promise<ProcessMetadata[]> {
  const rows:ProcessMetadata[]=[];
+ let stage:'LIST'|'STATUS'|'FIELDS'|'CWD'|'EXE'='LIST';
  try {
-  for(const entry of await readdir('/proc')){
+  for(const entry of await readdir(procRoot)){
    if(!/^\d+$/.test(entry))continue;
    try {
-    const status=await readFile(`/proc/${entry}/status`,'utf8');
+    stage='STATUS';
+    const status=await readFile(resolve(procRoot,entry,'status'),'utf8');
+    stage='FIELDS';
     const uid=Number(/^Uid:\s+(\d+)/m.exec(status)?.[1]);
     const ppid=Number(/^PPid:\s+(\d+)/m.exec(status)?.[1]);
     if(!Number.isSafeInteger(uid)||!Number.isSafeInteger(ppid))throw Error('invalid');
     // Other users cannot be workload children; never inspect their executable/cwd.
-    if(uid!==process.getuid!())continue;
-    rows.push({pid:Number(entry),ppid,uid,cwd:await readlink(`/proc/${entry}/cwd`),executable:await readlink(`/proc/${entry}/exe`)});
+    if(uid!==ownUid)continue;
+    stage='CWD';const cwd=await readlink(resolve(procRoot,entry,'cwd'));
+    stage='EXE';const executable=await readlink(resolve(procRoot,entry,'exe'));
+    rows.push({pid:Number(entry),ppid,uid,cwd,executable});
    } catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
   }
- } catch {throw Error('BOUNDARY_PROCESS_UNREADABLE');}
+ } catch(error){
+  const code=(error as NodeJS.ErrnoException)?.code;
+  const errno=typeof code==='string'&&['ENOENT','ESRCH','EACCES','EPERM','EINVAL','EISDIR','EIO','EMFILE','ENFILE'].includes(code)?code:'UNKNOWN';
+  throw Error('BOUNDARY_PROCESS_'+stage+'_'+errno);
+ }
  return rows;
 }
 export async function assertCleanBoundary(project:string,trustedFiles:Record<string,string>):Promise<void> {
@@ -94,6 +103,10 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const project=fileURLToPath(new URL('../../',import.meta.url));
   if(await realpath(process.cwd())!==await realpath(project))throw Error('BOUNDARY_PROJECT_INVALID');
   const [command,path,...rest]=process.argv.slice(2);
+  if(command==='probe-processes'&&!path&&!rest.length){
+   if(process.platform!=='linux'||!process.getuid)throw Error('BOUNDARY_UNSUPPORTED_PLATFORM');
+   await linuxProcesses();return;
+  }
   if(rest.length||!path||!isAbsolute(path))throw Error('BOUNDARY_ARGUMENTS_INVALID');
   if(command==='capture')await writeFile(path,JSON.stringify(await captureTrustedFiles(project)),{flag:'wx',mode:0o600});
   else if(command==='check')await assertCleanBoundary(project,JSON.parse(await readFile(path,'utf8')));
