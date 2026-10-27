@@ -204,7 +204,7 @@ jobs:
       - name: Detect surviving processes and trusted checkout changes
         id: boundary
         run: |
-          npm run ci:boundary -- check "$RUNNER_TEMP/study-hub-trusted.json"
+          node tools/ci/process-boundary.ts check "$RUNNER_TEMP/study-hub-trusted.json"
           node --input-type=module <<'NODE'
           import {readdir,realpath} from 'node:fs/promises';
           import {resolve} from 'node:path';

@@ -88,6 +88,17 @@ test('process metadata probes run before Reader and after synthetic tests before
   expect(steps[index].env).toBeUndefined();
  }
 });
+
+test('final process boundary uses native Node with the original baseline and no loader',async()=>{
+ const step=(await load()).jobs.verify.steps.find((s:any)=>s.id==='boundary');
+ const command=step.run.trim().split('\n')[0];
+ const bash=process.platform==='win32'?resolve((await exec('git',['--exec-path'])).stdout.trim(),'../../../bin/bash.exe'):'bash';
+ const shell="npm() { printf '%s\\n' 'SYNTHETIC_LOADER_USED' >&2; return 42; };\nnode() { test \"$#\" -eq 3 && test \"$1\" = tools/ci/process-boundary.ts && test \"$2\" = check && test \"$3\" = \"$RUNNER_TEMP/study-hub-trusted.json\" || return 43; printf '%s\\n' 'SYNTHETIC_NATIVE_BOUNDARY'; };\n";
+ let result:{code:number;stdout:string;stderr:string};
+ try{const output=await exec(bash,['-e','-o','pipefail','-c',shell+command],{env:{...process.env,RUNNER_TEMP:'/tmp/synthetic boundary TOKEN'},timeout:20000});result={code:0,...output};}
+ catch(error){result=error as typeof result;}
+ expect({code:result.code,stdout:result.stdout,stderr:result.stderr}).toEqual({code:0,stdout:'SYNTHETIC_NATIVE_BOUNDARY\n',stderr:''});
+});
 test('Reader revocation rejects API errors without exposing credential or response',async()=>{
  const step=(await load()).jobs.verify.steps.find((s:any)=>s.id==='revoke-reader');
  const script=step.run.split("<<'NODE'\n")[1].replace(/\nNODE\n?$/,'').replace('(async()=>{','return (async()=>{');
