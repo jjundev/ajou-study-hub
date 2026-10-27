@@ -65,7 +65,7 @@ jobs:
         run: node tools/ci/process-boundary.ts capture "$RUNNER_TEMP/study-hub-trusted.json"
       - name: Probe platform process metadata before Reader or dependencies
         id: process-probe
-        run: node tools/ci/process-boundary.ts probe-processes
+        run: node tools/ci/process-boundary.ts probe-processes "$RUNNER_TEMP/study-hub-trusted.json"
       - name: Load pinned resolver without lifecycle scripts or Reader credentials
         run: npm ci --ignore-scripts --no-audit --no-fund > /dev/null 2>&1 || { echo CI_RESOLVER_INSTALL_FAILED; exit 1; }
       - name: Derive exact sparse selections from trusted course configuration
@@ -196,7 +196,7 @@ jobs:
           npm run test:e2e -- --reporter=line || { echo CI_E2E_FAILED; exit 1; }
       - name: Probe process metadata after synthetic browsers before material build
         id: post-test-process-probe
-        run: node tools/ci/process-boundary.ts probe-processes
+        run: node tools/ci/process-boundary.ts probe-processes "$RUNNER_TEMP/study-hub-trusted.json"
       - name: Build and verify the same pinned material checkout
         run: |
           npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }

@@ -84,7 +84,7 @@ test('process metadata probes run before Reader and after synthetic tests before
  expect(after).toBe(steps.findIndex((s:any)=>s.name==='Typecheck and synthetic tests')+1);
  expect(after).toBeLessThan(steps.findIndex((s:any)=>s.name==='Build and verify the same pinned material checkout'));
  for(const index of [before,after]){
-  expect(steps[index].run).toBe('node tools/ci/process-boundary.ts probe-processes');
+  expect(steps[index].run).toBe('node tools/ci/process-boundary.ts probe-processes "$RUNNER_TEMP/study-hub-trusted.json"');
   expect(steps[index].env).toBeUndefined();
  }
 });
