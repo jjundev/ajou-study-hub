@@ -1,6 +1,6 @@
 # 자동 갱신 운영
 
-2026-10-27 최소 범위 기준. main `1922213`의 실제 Linux 전체 검증은 실행 `40463352335`에서 성공했다(단위·E2E·실제 5과목 빌드/검증·최종 native 경계 검사). 과목 5개 notifier 추가와 push 알림의 앱 dispatch 전달도 확인했다. 자동 게시는 계속 비활성이다. Variables·Cloudflare Secrets·enable, 첫 자동 배포와 보호/본인 접근 인수는 대기 중이며 Task 3 전체 완료로 기록하지 않는다.
+2026-10-27 최소 범위 기준. main `1922213`의 실제 Linux 전체 검증은 실행 `40463352335`에서 성공했다(단위·E2E·실제 5과목 빌드/검증·최종 native 경계 검사). 과목 5개 notifier 추가와 push 알림의 앱 dispatch 전달도 확인했다. 자동 게시를 활성화한 뒤 과목 알림 실행 `40521705461`과 앱 실행 `40521732696`이 게시 단계까지 성공했다. 현재 Worker 버전은 `bbebf0b4-53b6-43e2-82dc-5d22c2f204b3`이며 현재 Access baseline 일치, 새 본인 신원·5과목 catalog 접근, 비로그인 로그인 리다이렉트를 확인했다.
 
 ## 실행 계약
 
@@ -22,7 +22,7 @@ Reader 토큰은 자료 실행 전에 폐기한다. Cloudflare 키는 마지막 
 
 ## 실행 확인과 정지
 
-[앱 Actions](https://github.com/jjundev/ajou-study-hub/actions/workflows/study-hub-update.yml)에서 실행과 안전한 summary의 status/version/hash를 확인한다. 실제 인수에는 Linux 자료 빌드·검증 성공, 첫 자동 배포 version/hash, Access 유지·비로그인 차단·본인 접근, 과목 5개 알림 전달 확인이 필요하다. 배포 영수증의 `acceptanceComplete:false`는 사람의 실제 인수를 대신하지 않는다. 전체 코드 및 최종 native 재검토는 지적 없이 승인됐고 Linux 영수증은 로컬 `.reports/minimal-linux-acceptance.json`에 보존한다. 04:09 UTC의 실제 Cloudflare 조회는 승인 baseline의 Worker/버전과 일치했다. 저장된 본인 세션은 현재 인증 검사를 통과하지 못해 갱신 대기다. 민감 설정 승인 후 첫 실제 자동 배포는 과목 Notify 하나를 수동 dispatch하여 같은 알림 경로로 확인하며 자료를 변경하지 않는다.
+[앱 Actions](https://github.com/jjundev/ajou-study-hub/actions/workflows/study-hub-update.yml)에서 실행과 안전한 summary의 status/version/hash를 확인한다. 실제 인수에는 Linux 자료 빌드·검증 성공, 첫 자동 배포 version/hash, Access 유지·비로그인 차단·본인 접근, 과목 5개 알림 전달 확인이 필요하다. 배포 영수증의 `acceptanceComplete:false`는 사람의 실제 인수를 대신하지 않는다. 전체 코드 및 최종 native 재검토는 지적 없이 승인됐고 Linux 영수증은 로컬 `.reports/minimal-linux-acceptance.json`에 보존한다. 첫 실제 자동 게시의 알림→앱 실행→게시→현재 보호/본인 접근 확인을 완료했다. [알림 실행](https://github.com/jjundev/ajou-nonhoesil/actions/runs/40521705461)과 [앱 실행](https://github.com/jjundev/ajou-study-hub/actions/runs/40521732696)을 확인할 수 있다.
 
 자동 게시를 멈추려면 `STUDY_HUB_AUTOMATIC_UPDATES`를 삭제하거나 `enabled`가 아닌 값으로 바꾸고, 진행 중인 실행이 있는지 Actions에서 확인한다. 필요하면 해당 실행을 취소한다. 검증만 재실행할 때는 `mode:verify`를 지정한다. 기존 Free 예산 정지 조건을 유지한다. Actions 포함 사용량·초과 지출 차단과 Cloudflare 무료 상태를 확인하고, 초과/유료 전환 위험 또는 무료 상태 불명확 시 자동 게시를 끄고 원인을 확인한다. 유료 업그레이드는 자동 실행하지 않는다.
 
