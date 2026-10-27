@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Verification only; deployment is not enabled
+        description: Default follows the reviewed enable variable; verify forces verification only
         type: choice
-        options: [verify]
-        default: verify
+        options: [default, verify]
+        default: default
       source_repository:
         description: Optional source repository notification
         type: string
@@ -43,7 +43,7 @@ jobs:
         run: |
           node <<'NODE'
           const allowed=['','jjundev/ajou-nonhoesil','jjundev/ajou-life-science','jjundev/ajou-electronic-circuits-2','jjundev/ajou-jagual','jjundev/ajou-ml-basics'];
-          if(!['','verify'].includes(process.env.MODE??'')||!allowed.includes(process.env.SOURCE_REPOSITORY??'')){console.error('CI_INPUT_REJECTED');process.exitCode=1;}
+          if(!['','default','verify'].includes(process.env.MODE??'')||!allowed.includes(process.env.SOURCE_REPOSITORY??'')){console.error('CI_INPUT_REJECTED');process.exitCode=1;}
           NODE
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
@@ -229,3 +229,40 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: false
+      - name: Publish the verified sealed bundle only when explicitly enabled
+        id: publish
+        if: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' }}
+        env:
+          STUDY_HUB_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_DEPLOYMENT_SETTINGS }}
+          STUDY_HUB_AUTOMATION_BASELINE: ${{ vars.STUDY_HUB_AUTOMATION_BASELINE }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+        run: |
+          node --import tsx --input-type=module <<'NODE'
+          import {mkdir,writeFile,lstat} from 'node:fs/promises';
+          import {validateSettings} from './tools/deploy/access.ts';
+          import {validateBaseline} from './tools/deploy/access-baseline.ts';
+          try {
+            const parse=(key)=>{const text=process.env[key];if(!text||Buffer.byteLength(text)>65536)throw Error();return JSON.parse(text);};
+            const settings=parse('STUDY_HUB_DEPLOYMENT_SETTINGS'),baseline=parse('STUDY_HUB_AUTOMATION_BASELINE');
+            validateSettings(settings);validateBaseline(baseline);
+            for(const directory of ['.local','.reports']){await mkdir(directory,{recursive:true});if((await lstat(directory)).isSymbolicLink())throw Error();}
+            await writeFile('.local/deployment.json',JSON.stringify(settings),{flag:'wx',mode:0o600});
+            await writeFile('.reports/automation-baseline.json',JSON.stringify(baseline),{flag:'wx',mode:0o600});
+          } catch {console.error('CI_DEPLOYMENT_CONFIGURATION_REJECTED');process.exitCode=1;}
+          NODE
+          publication_status=0
+          npm run deploy:automatic > /dev/null 2>&1 || publication_status=$?
+          node --input-type=module <<'NODE'
+          import {readFile,appendFile} from 'node:fs/promises';
+          try {
+            const text=await readFile('.reports/automatic-release.json','utf8');if(Buffer.byteLength(text)>65536)throw Error();
+            const value=JSON.parse(text),statuses=['prepared-not-uploaded','upload-started-outcome-unknown','uploaded-postcheck-pending','published-protection-verified'];
+            if(!statuses.includes(value.status))throw Error();
+            const safe={status:value.status,acceptanceComplete:false};
+            for(const key of ['versionId','currentVersionId','previousVersionId'])if(value[key]!==undefined){if(typeof value[key]!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value[key]))throw Error();safe[key]=value[key];}
+            if(value.bundleHash!==undefined){if(typeof value.bundleHash!=='string'||!/^[a-f0-9]{64}$/.test(value.bundleHash))throw Error();safe.bundleHash=value.bundleHash;}
+            await appendFile(process.env.GITHUB_STEP_SUMMARY,'Automatic publication outcome (human acceptance remains separate):\n\n```json\n'+JSON.stringify(safe)+'\n```\n');
+          } catch {console.error('CI_PUBLICATION_RECEIPT_UNAVAILABLE_INSPECT_CURRENT_TARGET');process.exitCode=1;}
+          NODE
+          if [ "$publication_status" -ne 0 ]; then echo CI_AUTOMATIC_PUBLICATION_FAILED_INSPECT_CURRENT_TARGET; exit 1; fi

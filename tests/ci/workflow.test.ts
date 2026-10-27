@@ -7,17 +7,19 @@ import { expect, test } from 'vitest';
 import { parse } from 'yaml';
 const load=async()=>parse(await readFile(new URL('../../.github/workflows/study-hub-update.yml',import.meta.url),'utf8'));
 const exec=promisify(execFile);
-test('verify_only_has_no_cloud_credentials and serializes production work',async()=>{
+test('default_disabled_has_no_early_cloud_credentials and serializes production work',async()=>{
  const workflow=await load(),job=workflow.jobs.verify;
  expect(workflow.concurrency).toEqual({group:'study-hub-production','cancel-in-progress':false});
  expect(workflow.on.push.branches).toEqual(['main']);
  expect(Object.keys(workflow.on).sort()).toEqual(['push','workflow_dispatch']);
- expect(workflow.on.workflow_dispatch.inputs.mode.default).toBe('verify');
+ expect(workflow.on.workflow_dispatch.inputs.mode.default).toBe('default');
  expect(workflow.permissions).toEqual({contents:'read',actions:'read'});
  expect(job['runs-on']).toBe('ubuntu-24.04');
  expect(job['timeout-minutes']).toBe(60);
  expect(job.env).toBeUndefined();
- expect(JSON.stringify(workflow)).not.toMatch(/CLOUDFLARE|STUDY_HUB_LEDGER|deploy:private|deploy:bootstrap/);
+ expect(JSON.stringify(workflow)).not.toMatch(/STUDY_HUB_LEDGER|deploy:private|deploy:bootstrap/);
+ const publish=job.steps.at(-1);expect(publish.id).toBe('publish');expect(publish.if).toBe("${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' }}");
+ for(const step of job.steps.slice(0,-1))expect(JSON.stringify(step)).not.toContain('CLOUDFLARE');
  const steps=job.steps;
  expect(steps.filter((s:any)=>s.uses).every((s:any)=>/@[a-f0-9]{40}$/.test(s.uses))).toBe(true);
  expect(steps.find((s:any)=>s.id==='reader').with['permission-contents']).toBe('read');
@@ -32,7 +34,7 @@ test('app and five sources use fixed SHA refs without persisted credentials',asy
  for(const step of checkouts.slice(1)){expect(step.with.ref).toMatch(/^\$\{\{ steps\.revisions\.outputs\.[a-z_0-9]+ \}\}$/);expect(step.with.path).toMatch(/^sources\//);}
  const revoke=steps.findIndex((s:any)=>s.id==='revoke-reader'),browser=steps.findIndex((s:any)=>s.id==='browsers');
  expect(revoke).toBeGreaterThan(steps.indexOf(checkouts.at(-1)));expect(browser).toBeGreaterThan(revoke);
- for(const step of steps.slice(revoke+1))expect(JSON.stringify(step.env??{})).not.toMatch(/secrets\.|reader\.outputs\.token/);
+ for(const step of steps.slice(revoke+1)){expect(JSON.stringify(step.env??{})).not.toMatch(/reader\.outputs\.token|LEDGER/);if(step.id!=='publish')expect(JSON.stringify(step.env??{})).not.toContain('secrets.');}
 });
 
 test('sources use trusted generated exact non-cone selection and bounded checks before binding',async()=>{
@@ -66,7 +68,7 @@ test('source allowlist guard rejects shell payloads and non-verify modes before 
  const guard=steps.find((s:any)=>s.id==='guard');
  const script=guard.run.split("<<'NODE'\n")[1].replace(/\nNODE\n?$/,'');
  const execute=new Function('process','console',script);
- for(const [source,mode,accepted] of [['','',true],['jjundev/ajou-jagual','verify',true],['jjundev/other','verify',false],['$(echo injected)','verify',false],['','auto',false]] as const){
+ for(const [source,mode,accepted] of [['','',true],['jjundev/ajou-jagual','verify',true],['','default',true],['jjundev/other','verify',false],['$(echo injected)','verify',false],['','auto',false]] as const){
   const logs:string[]=[],process={env:{SOURCE_REPOSITORY:source,MODE:mode},exitCode:0};
   execute(process,{error:(s:string)=>logs.push(s)});
   expect(process.exitCode).toBe(accepted?0:1);expect(logs).toEqual(accepted?[]:['CI_INPUT_REJECTED']);
@@ -141,4 +143,33 @@ test('status metadata hydration uses scoped Reader before unconditional revocati
  expect(hydrate).toBe(revoke-1);expect(steps[hydrate].env).toEqual({GH_TOKEN:'${{ steps.reader.outputs.token }}'});
  expect(steps[hydrate].run).toBe('node --import tsx tools/ci/hydrate-source-status.ts');
  expect(steps[revoke].if).toContain('always()');expect(steps.findIndex((s:any)=>s.id==='source-limits')).toBeGreaterThan(revoke);
+});
+
+
+test('only final publication receives Cloudflare credentials, after browser/server boundary',async()=>{
+ const steps=(await load()).jobs.verify.steps,publish=steps.at(-1),boundary=steps.findIndex((s:any)=>s.id==='boundary');
+ expect(boundary).toBeGreaterThan(steps.findIndex((s:any)=>s.name==='Build and verify the same pinned material checkout'));
+ expect(steps.indexOf(publish)).toBeGreaterThan(boundary);
+ expect(publish.env).toEqual({STUDY_HUB_DEPLOYMENT_SETTINGS:'${{ vars.STUDY_HUB_DEPLOYMENT_SETTINGS }}',STUDY_HUB_AUTOMATION_BASELINE:'${{ vars.STUDY_HUB_AUTOMATION_BASELINE }}',CLOUDFLARE_API_TOKEN:'${{ secrets.CLOUDFLARE_API_TOKEN }}',CLOUDFLARE_READ_TOKEN:'${{ secrets.CLOUDFLARE_READ_TOKEN }}'});
+ expect(publish.run).toContain('validateSettings(settings);validateBaseline(baseline)');
+ expect(publish.run).toContain('npm run deploy:automatic');expect(publish.run).not.toMatch(/playwright|chromium|wrangler|deploy:private|ledger/i);
+ expect(publish.run).not.toMatch(/\$\{\{/);expect(publish.run).toContain("{flag:'wx',mode:0o600}");
+});
+
+
+test('publication summary exports only bounded allowlisted outcomes and fails on an invalid receipt',async()=>{
+ const publish=(await load()).jobs.verify.steps.at(-1),script=publish.run.split("node --input-type=module <<'NODE'\n")[1].split('\nNODE')[0];
+ const root=await mkdtemp(join(tmpdir(),'hub-publication-summary-')),summary=join(root,'summary');
+ try{
+  await mkdir(join(root,'.reports'));
+  const value={status:'upload-started-outcome-unknown',previousVersionId:'11111111-1111-1111-1111-111111111111',bundleHash:'a'.repeat(64),privatePath:'private-canary',token:'secret-canary'};
+  await writeFile(join(root,'.reports','automatic-release.json'),JSON.stringify(value));
+  const result=await exec(process.execPath,['--input-type=module','--eval',script],{cwd:root,env:{...process.env,GITHUB_STEP_SUMMARY:summary},timeout:30000});
+  expect(result.stdout).toBe('');expect(result.stderr).toBe('');
+  const text=await readFile(summary,'utf8');expect(text).toContain('upload-started-outcome-unknown');expect(text).toContain('"acceptanceComplete":false');expect(text).not.toMatch(/canary|privatePath|token/);
+  await writeFile(join(root,'.reports','automatic-release.json'),JSON.stringify({...value,versionId:'private-canary'}));
+  const invalid=await exec(process.execPath,['--input-type=module','--eval',script],{cwd:root,env:{...process.env,GITHUB_STEP_SUMMARY:summary},timeout:30000}).then(()=>({code:0,stderr:''}),error=>({code:error.code,stderr:error.stderr}));
+  expect(invalid).toEqual({code:1,stderr:'CI_PUBLICATION_RECEIPT_UNAVAILABLE_INSPECT_CURRENT_TARGET\n'});
+  expect(await readFile(summary,'utf8')).toBe(text);
+ }finally{await rm(root,{recursive:true,force:true});}
 });
