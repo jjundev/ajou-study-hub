@@ -34,6 +34,17 @@ test('app and five sources use fixed SHA refs without persisted credentials',asy
  expect(revoke).toBeGreaterThan(steps.indexOf(checkouts.at(-1)));expect(browser).toBeGreaterThan(revoke);
  for(const step of steps.slice(revoke+1))expect(JSON.stringify(step.env??{})).not.toMatch(/secrets\.|reader\.outputs\.token/);
 });
+
+test('sources use trusted generated exact non-cone selection and bounded checks before binding',async()=>{
+ const steps=(await load()).jobs.verify.steps,reader=steps.findIndex((s:any)=>s.id==='reader');
+ const prepare=steps.findIndex((s:any)=>s.id==='source-git'),patterns=steps.findIndex((s:any)=>s.id==='sparse'),probe=steps.findIndex((s:any)=>s.id==='sparse-probe');
+ expect(prepare).toBeGreaterThan(-1);expect(prepare).toBeLessThan(steps.findIndex((s:any)=>s.name?.startsWith('Record trusted')));
+ expect(patterns).toBeLessThan(reader);expect(patterns).toBeGreaterThan(prepare);expect(probe).toBeLessThan(reader);expect(probe).toBeGreaterThan(patterns);
+ const sources=steps.filter((s:any)=>s.uses?.startsWith('actions/checkout@')&&s.with.path.startsWith('sources/'));
+ for(const source of sources){const key=source.with.path.slice('sources/'.length).replaceAll('-','_');expect(source.with['sparse-checkout']).toBe('${{ steps.sparse.outputs.'+key+' }}');expect(source.with['sparse-checkout-cone-mode']).toBe(false);expect(source.with.lfs).toBe(false);expect(source.with.submodules).toBe(false);}
+ const limits=steps.findIndex((s:any)=>s.id==='source-limits');expect(limits).toBeGreaterThan(steps.findIndex((s:any)=>s.id==='revoke-reader'));
+ expect(steps[limits].run.indexOf('tools/ci/source-limits.ts')).toBeLessThan(steps[limits].run.indexOf('sources-cli.ts bind'));
+});
 test('source allowlist guard rejects shell payloads and non-verify modes before token issuance',async()=>{
  const steps=(await load()).jobs.verify.steps;
  const guard=steps.find((s:any)=>s.id==='guard');

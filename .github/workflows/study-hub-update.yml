@@ -58,10 +58,19 @@ jobs:
           persist-credentials: false
           set-safe-directory: false
           show-progress: false
+      - name: Prepare isolated Git configuration before Reader or source checkout
+        id: source-git
+        run: node tools/ci/source-git-environment.ts
       - name: Record trusted checkout before executing dependencies
         run: node tools/ci/process-boundary.ts capture "$RUNNER_TEMP/study-hub-trusted.json"
       - name: Load pinned resolver without lifecycle scripts or Reader credentials
         run: npm ci --ignore-scripts --no-audit --no-fund > /dev/null 2>&1 || { echo CI_RESOLVER_INSTALL_FAILED; exit 1; }
+      - name: Derive exact sparse selections from trusted course configuration
+        id: sparse
+        run: node --import tsx tools/ci/sparse-source.ts
+      - name: Prove sparse Git selection with synthetic local repositories before Reader
+        id: sparse-probe
+        run: npx vitest run tests/ci/sparse-source.test.ts tests/ci/source-limits.test.ts tests/ci/source-git-environment.test.ts --maxWorkers=1 > /dev/null 2>&1 || { echo CI_SPARSE_PROBE_FAILED; exit 1; }
       - name: Create source-only Reader token
         id: reader
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
@@ -90,6 +99,10 @@ jobs:
           ref: ${{ steps.revisions.outputs.logic_lab }}
           token: ${{ steps.reader.outputs.token }}
           path: sources/logic-lab
+          sparse-checkout: ${{ steps.sparse.outputs.logic_lab }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
           persist-credentials: false
           set-safe-directory: false
           show-progress: false
@@ -99,6 +112,10 @@ jobs:
           ref: ${{ steps.revisions.outputs.life_science }}
           token: ${{ steps.reader.outputs.token }}
           path: sources/life-science
+          sparse-checkout: ${{ steps.sparse.outputs.life_science }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
           persist-credentials: false
           set-safe-directory: false
           show-progress: false
@@ -108,6 +125,10 @@ jobs:
           ref: ${{ steps.revisions.outputs.circuits_2 }}
           token: ${{ steps.reader.outputs.token }}
           path: sources/circuits-2
+          sparse-checkout: ${{ steps.sparse.outputs.circuits_2 }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
           persist-credentials: false
           set-safe-directory: false
           show-progress: false
@@ -117,6 +138,10 @@ jobs:
           ref: ${{ steps.revisions.outputs.data_structures }}
           token: ${{ steps.reader.outputs.token }}
           path: sources/data-structures
+          sparse-checkout: ${{ steps.sparse.outputs.data_structures }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
           persist-credentials: false
           set-safe-directory: false
           show-progress: false
@@ -126,6 +151,10 @@ jobs:
           ref: ${{ steps.revisions.outputs.ml_basics }}
           token: ${{ steps.reader.outputs.token }}
           path: sources/ml-basics
+          sparse-checkout: ${{ steps.sparse.outputs.ml_basics }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
           persist-credentials: false
           set-safe-directory: false
           show-progress: false
@@ -152,20 +181,9 @@ jobs:
           npm test -- --maxWorkers=1 > /dev/null 2>&1 || { echo CI_UNIT_FAILED; exit 1; }
           npm run test:e2e > /dev/null 2>&1 || { echo CI_E2E_FAILED; exit 1; }
       - name: Bound source paths, sizes, and free space before material reads
+        id: source-limits
         run: |
-          node --input-type=module <<'NODE'
-          import {readdir,lstat,statfs} from 'node:fs/promises';
-          import {resolve} from 'node:path';
-          let count=0,total=0;
-          async function walk(root){for(const item of await readdir(root,{withFileTypes:true})){
-            if(item.name==='.git')continue;
-            const path=resolve(root,item.name),stat=await lstat(path);
-            if(stat.isSymbolicLink()||(!stat.isFile()&&!stat.isDirectory()))throw Error();
-            if(stat.isDirectory())await walk(path);else {count++;total+=stat.size;if(count>100000||stat.size>256*1024*1024||total>2*1024**3)throw Error();}
-          }}
-          try {const disk=await statfs('.');if(disk.bavail*disk.bsize<4*1024**3)throw Error();await walk('../sources');}
-          catch {console.error('CI_SOURCE_LIMIT_REJECTED');process.exitCode=1;}
-          NODE
+          node --import tsx tools/ci/source-limits.ts
           node --import tsx tools/ci/sources-cli.ts bind "$GITHUB_SHA" .local/revisions.json > /dev/null 2>&1 || { echo CI_BIND_FAILED; exit 1; }
       - name: Build and verify the same pinned material checkout
         run: |

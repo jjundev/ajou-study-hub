@@ -1,0 +1,32 @@
+import { afterEach, expect, test } from 'vitest';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { prepareSourceGit } from '../../tools/ci/source-git-environment.js';
+const exec=promisify(execFile);let root='';
+afterEach(async()=>{if(root)await rm(root,{recursive:true,force:true});root='';});
+async function fixture(){
+ root=await mkdtemp(join(tmpdir(),'hub-source-git-'));const app=join(root,'app'),temp=join(root,'temp'),output=join(root,'github-env');await mkdir(app);await mkdir(temp);
+ const env={PATH:process.env.PATH,SystemRoot:process.env.SystemRoot,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:join(root,'empty-global')};
+ await exec('git',['init'],{cwd:app,env,timeout:15000});return {app,temp,output,env};
+}
+test('isolates system/global config and templates before any Reader source checkout',async()=>{
+ const f=await fixture();await prepareSourceGit(f.app,f.temp,f.output,f.env);
+ const text=await readFile(f.output,'utf8'),env={...f.env,...Object.fromEntries(text.trim().split('\n').map(line=>{const split=line.indexOf('=');return [line.slice(0,split),line.slice(split+1)];}))};
+ const config=(await exec('git',['config','--list'],{cwd:f.app,env,timeout:15000})).stdout;
+ expect(config).toContain('core.sparsecheckoutcone=false');expect(config).toContain('core.fsmonitor=false');expect(config).not.toMatch(/credential\.|filter\.|hookspath/);
+ expect(text).toContain('GIT_CONFIG_NOSYSTEM=1\n');expect(text).toContain('GIT_ATTR_NOSYSTEM=1\n');expect(text).toContain('GIT_TEMPLATE_DIR=');
+ const source=join(root,'synthetic-source');await mkdir(source);await exec('git',['init'],{cwd:source,env,timeout:15000});
+ expect(await readFile(join(source,'.git','info','exclude'),'utf8')).toBe('');
+ expect(await readdir(join(source,'.git','hooks'))).toEqual(['README']);
+});
+test.each(['credential.helper','core.hooksPath','core.fsmonitor','url.https://evil.test/.insteadOf','filter.evil.smudge','include.path'])('rejects effective dangerous local Git setting %s without leaking its value',async key=>{
+ const f=await fixture();await exec('git',['config','--local',key,'private-value'],{cwd:f.app,env:f.env,timeout:15000});
+ await expect(prepareSourceGit(f.app,f.temp,f.output,f.env)).rejects.toThrow('CI_SOURCE_GIT_UNSAFE');
+});
+test('rejects inherited command configuration and existing source destination before source work',async()=>{
+ const f=await fixture();for(const key of ['GIT_CONFIG_COUNT','GIT_ASKPASS','SSH_ASKPASS','GIT_EXTERNAL_DIFF','GIT_EXEC_PATH'])await expect(prepareSourceGit(f.app,f.temp,f.output,{...f.env,[key]:'private-command'})).rejects.toThrow('CI_SOURCE_GIT_UNSAFE');
+ await mkdir(join(root,'sources'));await writeFile(join(root,'sources','private'),'synthetic');await expect(prepareSourceGit(f.app,f.temp,f.output,f.env)).rejects.toThrow('CI_SOURCE_GIT_UNSAFE');
+});
