@@ -64,6 +64,7 @@ export function assertNoRelevantProcesses(rows:ProcessMetadata[],self:number,uid
 export async function linuxProcesses(procRoot='/proc',ownUid=process.getuid?.()):Promise<ProcessMetadata[]> {
  const rows:ProcessMetadata[]=[];
  let stage:'LIST'|'STATUS'|'FIELDS'|'CWD'|'EXE'='LIST';
+ let uidRole:'ALL_MATCH'|'EFFECTIVE_OTHER'|'SAVED_OR_FS_OTHER'|'UNKNOWN'='UNKNOWN';
  try {
   for(const entry of await readdir(procRoot)){
    if(!/^\d+$/.test(entry))continue;
@@ -76,6 +77,9 @@ export async function linuxProcesses(procRoot='/proc',ownUid=process.getuid?.())
     if(!Number.isSafeInteger(uid)||!Number.isSafeInteger(ppid))throw Error('invalid');
     // Other users cannot be workload children; never inspect their executable/cwd.
     if(uid!==ownUid)continue;
+    // Diagnostic only: retain real-UID selection and every existing denial.
+    const roles=/^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(status)?.slice(1).map(Number);
+    uidRole=!roles?.every(Number.isSafeInteger)?'UNKNOWN':roles[1]!==ownUid?'EFFECTIVE_OTHER':roles.slice(2).some(value=>value!==ownUid)?'SAVED_OR_FS_OTHER':'ALL_MATCH';
     stage='CWD';const cwd=await readlink(resolve(procRoot,entry,'cwd'));
     stage='EXE';const executable=await readlink(resolve(procRoot,entry,'exe'));
     rows.push({pid:Number(entry),ppid,uid,cwd,executable});
@@ -84,7 +88,7 @@ export async function linuxProcesses(procRoot='/proc',ownUid=process.getuid?.())
  } catch(error){
   const code=(error as NodeJS.ErrnoException)?.code;
   const errno=typeof code==='string'&&['ENOENT','ESRCH','EACCES','EPERM','EINVAL','EISDIR','EIO','EMFILE','ENFILE'].includes(code)?code:'UNKNOWN';
-  throw Error('BOUNDARY_PROCESS_'+stage+'_'+errno);
+  throw Error('BOUNDARY_PROCESS_'+stage+'_'+errno+(['CWD','EXE'].includes(stage)?'_UID_'+uidRole:''));
  }
  return rows;
 }

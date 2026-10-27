@@ -84,11 +84,16 @@ test('Linux process failures expose only fixed stage and errno without process p
   await expect(linuxProcesses(root,1000)).rejects.toThrow(/^BOUNDARY_PROCESS_FIELDS_UNKNOWN$/);
   await writeFile(join(pid,'status'),'Uid:\t1000 1000 1000 1000\nPPid:\t1\n');
   await writeFile(join(pid,'cwd'),'private-not-a-link-TOKEN');
-  await expect(linuxProcesses(root,1000)).rejects.toThrow(/^BOUNDARY_PROCESS_CWD_EINVAL$/);
+  await expect(linuxProcesses(root,1000)).rejects.toThrow(/^BOUNDARY_PROCESS_CWD_EINVAL_UID_ALL_MATCH$/);
+  for(const [fields,role] of [['1000 0 0 0','EFFECTIVE_OTHER'],['1000 1000 0 1000','SAVED_OR_FS_OTHER'],['1000 1000 1000 0','SAVED_OR_FS_OTHER'],['1000','UNKNOWN']]){
+   await writeFile(join(pid,'status'),'Uid:\t'+fields+'\nPPid:\t1\n');
+   await expect(linuxProcesses(root,1000)).rejects.toThrow('BOUNDARY_PROCESS_CWD_EINVAL_UID_'+role);
+  }
+  await writeFile(join(pid,'status'),'Uid:\t1000 1000 1000 1000\nPPid:\t1\n');
   await unlink(join(pid,'cwd'));
   await symlink(root,join(pid,'cwd'),process.platform==='win32'?'junction':'dir');
   await writeFile(join(pid,'exe'),'private-not-a-link-TOKEN');
-  await expect(linuxProcesses(root,1000)).rejects.toThrow(/^BOUNDARY_PROCESS_EXE_EINVAL$/);
+  await expect(linuxProcesses(root,1000)).rejects.toThrow(/^BOUNDARY_PROCESS_EXE_EINVAL_UID_ALL_MATCH$/);
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
