@@ -134,3 +134,11 @@ test('workflow bind wrapper preserves safe CLI stderr while discarding stdout an
   expect(success.stdout).toBe('');expect(success.stderr).toBe('');
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+
+test('status metadata hydration uses scoped Reader before unconditional revocation and repeated post-revoke bind',async()=>{
+ const steps=(await load()).jobs.verify.steps,hydrate=steps.findIndex((s:any)=>s.id==='hydrate-source-status'),revoke=steps.findIndex((s:any)=>s.id==='revoke-reader');
+ expect(hydrate).toBe(revoke-1);expect(steps[hydrate].env).toEqual({GH_TOKEN:'${{ steps.reader.outputs.token }}'});
+ expect(steps[hydrate].run).toBe('node --import tsx tools/ci/hydrate-source-status.ts');
+ expect(steps[revoke].if).toContain('always()');expect(steps.findIndex((s:any)=>s.id==='source-limits')).toBeGreaterThan(revoke);
+});

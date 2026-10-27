@@ -158,6 +158,11 @@ jobs:
           persist-credentials: false
           set-safe-directory: false
           show-progress: false
+      - name: Hydrate status metadata while scoped Reader is available
+        id: hydrate-source-status
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        run: node --import tsx tools/ci/hydrate-source-status.ts
       - name: Revoke Reader before any browser or material execution
         id: revoke-reader
         if: ${{ always() && steps.reader.outcome == 'success' }}
