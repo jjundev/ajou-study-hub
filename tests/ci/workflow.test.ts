@@ -42,8 +42,24 @@ test('sources use trusted generated exact non-cone selection and bounded checks 
  expect(patterns).toBeLessThan(reader);expect(patterns).toBeGreaterThan(prepare);expect(probe).toBeLessThan(reader);expect(probe).toBeGreaterThan(patterns);
  const sources=steps.filter((s:any)=>s.uses?.startsWith('actions/checkout@')&&s.with.path.startsWith('sources/'));
  for(const source of sources){const key=source.with.path.slice('sources/'.length).replaceAll('-','_');expect(source.with['sparse-checkout']).toBe('${{ steps.sparse.outputs.'+key+' }}');expect(source.with['sparse-checkout-cone-mode']).toBe(false);expect(source.with.lfs).toBe(false);expect(source.with.submodules).toBe(false);}
- const limits=steps.findIndex((s:any)=>s.id==='source-limits');expect(limits).toBeGreaterThan(steps.findIndex((s:any)=>s.id==='revoke-reader'));
+ const limits=steps.findIndex((s:any)=>s.id==='source-limits');expect(limits).toBe(steps.findIndex((s:any)=>s.id==='revoke-reader')+1);
+ expect(limits).toBeLessThan(steps.findIndex((s:any)=>s.name==='Install trusted application dependencies'));
  expect(steps[limits].run.indexOf('tools/ci/source-limits.ts')).toBeLessThan(steps[limits].run.indexOf('sources-cli.ts bind'));
+});
+
+test('synthetic E2E failure prints test diagnostics and still fails the workflow shell',async()=>{
+ const steps=(await load()).jobs.verify.steps;
+ const step=steps.find((s:any)=>s.name==='Typecheck and synthetic tests');
+ const command=step.run.trim().split('\n').find((line:string)=>line.startsWith('npm run test:e2e'));
+ const bash=process.platform==='win32'?resolve((await exec('git',['--exec-path'])).stdout.trim(),'../../../bin/bash.exe'):'bash';
+ let result:{code:number;stdout:string;stderr:string}|undefined;
+ // Substitute only the external runner; exercise the actual workflow's shell redirections and failure branch.
+ const runner="npm() { test \"$*\" = 'run test:e2e -- --reporter=line' || return 99; printf '%s\\n' 'synthetic.spec.ts:42 expected visible'; printf '%s\\n' 'synthetic browser launch failure' >&2; return 7; };\n";
+ try{await exec(bash,['-e','-o','pipefail','-c',runner+command],{timeout:20000});}
+ catch(error){result=error as typeof result;}
+ expect(result?.code).toBe(1);
+ expect(result?.stdout).toBe('synthetic.spec.ts:42 expected visible\nCI_E2E_FAILED\n');
+ expect(result?.stderr).toBe('synthetic browser launch failure\n');
 });
 test('source allowlist guard rejects shell payloads and non-verify modes before token issuance',async()=>{
  const steps=(await load()).jobs.verify.steps;

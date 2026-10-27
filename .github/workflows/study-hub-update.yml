@@ -170,6 +170,11 @@ jobs:
             if(response.status!==204||response.redirected)throw Error();
           })().catch(()=>{console.error('CI_READER_REVOCATION_FAILED');process.exitCode=1;});
           NODE
+      - name: Bound source paths, sizes, and free space before material reads
+        id: source-limits
+        run: |
+          node --import tsx tools/ci/source-limits.ts
+          node --import tsx tools/ci/sources-cli.ts bind "$GITHUB_SHA" .local/revisions.json > /dev/null || { echo CI_BIND_FAILED; exit 1; }
       - name: Install trusted application dependencies
         run: npm ci --no-audit --no-fund > /dev/null 2>&1 || { echo CI_INSTALL_FAILED; exit 1; }
       - name: Install three browsers
@@ -179,12 +184,8 @@ jobs:
         run: |
           npm run typecheck > /dev/null 2>&1 || { echo CI_TYPECHECK_FAILED; exit 1; }
           npm test -- --maxWorkers=1 > /dev/null 2>&1 || { echo CI_UNIT_FAILED; exit 1; }
-          npm run test:e2e > /dev/null 2>&1 || { echo CI_E2E_FAILED; exit 1; }
-      - name: Bound source paths, sizes, and free space before material reads
-        id: source-limits
-        run: |
-          node --import tsx tools/ci/source-limits.ts
-          node --import tsx tools/ci/sources-cli.ts bind "$GITHUB_SHA" .local/revisions.json > /dev/null || { echo CI_BIND_FAILED; exit 1; }
+          # Default app commands generate synthetic fixtures; no --sources or cloud credentials here.
+          npm run test:e2e -- --reporter=line || { echo CI_E2E_FAILED; exit 1; }
       - name: Build and verify the same pinned material checkout
         run: |
           npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }
