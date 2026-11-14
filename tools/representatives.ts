@@ -24,6 +24,50 @@ export function trackRepresentativeRequests(page: Page) {
   page.on("requestfailed", finish);
   return () => waitForSettledRequests(state);
 }
+export async function confirmCancelledCdnRequest(
+  url: string, resourceType: string, request: typeof fetch = fetch,
+): Promise<boolean> {
+  const target = URL.parse(url);
+  if (target?.origin !== "https://cdn.jsdelivr.net" || target.username || target.password ||
+      !/^\/npm\/(?:pretendard@1\.3\.9|katex@0\.16\.11)\/dist\//.test(target.pathname))
+    return false;
+  try {
+    const response = await request(target.href, {
+      credentials: "omit", redirect: "error", signal: AbortSignal.timeout(10000),
+    });
+    try {
+      if (response.status !== 200) return false;
+      const mime = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+      const path = target.pathname.toLowerCase();
+      if (resourceType === "stylesheet") return path.endsWith(".css") && mime === "text/css";
+      if (resourceType === "script")
+        return path.endsWith(".js") && /^(?:text|application)\/(?:java|ecma)script$/.test(mime ?? "");
+      if (resourceType !== "font" || !path.endsWith(".woff2") ||
+          !/^(?:font\/woff2|application\/(?:font-woff2|octet-stream))$/.test(mime ?? ""))
+        return false;
+      const reader = response.body?.getReader();
+      if (!reader) return false;
+      try {
+        const prefix: number[] = [];
+        while (prefix.length < 4) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          prefix.push(...value.slice(0, 4 - prefix.length));
+        }
+        return String.fromCharCode(...prefix) === "wOF2";
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+    } finally {
+      await response.body?.cancel().catch(() => {});
+    }
+  } catch {
+    return false;
+  }
+}
+
+
 export const representativePaths = [
   ["life-science", "복습노트/0901/복습문제_0901_Biomolecules_and_Cells.html"],
   ["data-structures", "복습노트/1012/정리노트_1012_Queue.html"],
@@ -111,18 +155,27 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                 classification: "copy",
               }),
             );
-            page.on("requestfailed", (r) =>
-              observations.push({
+            const cancelled = new Map<Observation, string>();
+            const completed = new Set<string>();
+            page.on("requestfinished", async request => {
+              const response = await request.response();
+              if (response?.status() === 200) completed.add(request.url());
+            });
+            page.on("requestfailed", request => {
+              const observation: Observation = {
                 documentId: doc.id,
                 kind: "representative-requestfailed",
-                target: r.url(),
-                reason: r.failure()?.errorText ?? "failed",
-                classification:
-                  new URL(r.url()).origin === new URL(baseUrl).origin
-                    ? "copy"
-                    : "external",
-              }),
-            );
+                target: request.url(),
+                reason: request.failure()?.errorText ?? "failed",
+                classification: new URL(request.url()).origin === new URL(baseUrl).origin
+                  ? "copy"
+                  : "external",
+              };
+              observations.push(observation);
+              if (observation.classification === "external" &&
+                  /^(?:net::ERR_ABORTED|NS_BINDING_ABORTED|Cancelled|cancelled)$/.test(observation.reason))
+                cancelled.set(observation, request.resourceType());
+            });
             page.on("response", (r) => {
               if (r.status() >= 400)
                 observations.push({
@@ -378,6 +431,13 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
               scenario.error = (e as Error).message;
             } finally {
               await page.close();
+              if (scenario.passed) {
+                for (const [observation, resourceType] of cancelled) {
+                  const available = completed.has(observation.target) ||
+                    await confirmCancelledCdnRequest(observation.target, resourceType);
+                  if (available) observations.splice(observations.indexOf(observation), 1);
+                }
+              }
               console.log(
                 `Representative ${browserName} ${width} ${courseId}: ${scenario.passed ? "PASS" : "FAIL " + scenario.error}`,
               );

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { build } from "esbuild";
 import { transformHtml } from "../../tools/content/transform.js";
-import { pagerHistory, trackRepresentativeRequests } from "../../tools/representatives.js";
+import { pagerHistory, trackRepresentativeRequests, confirmCancelledCdnRequest } from "../../tools/representatives.js";
 import type { Catalog, DocumentInfo } from "../../src/content/model.js";
 test("representative pager check requires rendered source history after actual Next actions", async ({
   page,
@@ -67,4 +67,20 @@ test("waits for a representative's delayed requests before the verifier reloads 
   await page.evaluate(() => { void fetch("/slow-representative-resource"); });
   await settle();
   expect(responseSent).toBe(true);
+});
+
+test("confirms an interrupted CDN resource only if the exact URL returns a valid response", async () => {
+  const url = "https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/woff2/Pretendard-Regular.woff2";
+  const bodies = [new Response("wOF2contents", { headers: { "content-type": "font/woff2" } }),
+                  new Response("<html>error</html>", { headers: { "content-type": "text/html" } }),
+                  new Response("wOF2contents", { status: 404, headers: { "content-type": "font/woff2" } })];
+  for (const [index, response] of bodies.entries()) {
+    expect(await confirmCancelledCdnRequest(url, "font", async target => {
+      expect(target).toBe(url);
+      return response;
+    })).toBe(index === 0);
+  }
+  expect(await confirmCancelledCdnRequest(url.replace("cdn.jsdelivr.net", "other.invalid"), "font", async () => {
+    throw new Error("must not request an unknown CDN");
+  })).toBe(false);
 });
