@@ -58,7 +58,21 @@ async function cloudflare(token: string, path: string, step: string, body?: obje
     if (allowInactive && Array.isArray(data.errors) && data.errors.some(entry => record(entry).code === 1000) &&
         (response.status === 400 || response.ok)) return undefined;
     if (!response.ok || data.success !== true || !('result' in data) ||
-        (Array.isArray(data.errors) && data.errors.length)) fail(step + '_HTTP_' + response.status);
+        (Array.isArray(data.errors) && data.errors.length)) {
+      if (body && Array.isArray(data.errors)) {
+        for (const entry of data.errors.map(record)) {
+          const message = typeof entry.message === 'string' ? entry.message.toLowerCase() : '';
+          const hints = ['failed common permission check', 'permission group', 'expires_on', 'not_before',
+            'invalid resource', 'must specify a zone', 'account owned', 'permission policy', 'invalid request body',
+            'invalid match-all', 'name', 'date', 'ttl', 'time', 'conflict', 'principal'];
+          console.error('Cloudflare token creation diagnostic', {
+            code: Number.isSafeInteger(entry.code) ? entry.code : undefined,
+            hints: hints.filter(hint => message.includes(hint)),
+          });
+        }
+      }
+      fail(step + '_HTTP_' + response.status);
+    }
     return data.result;
   } catch (error) {
     const suffix = error instanceof Error && new RegExp('^' + step + '_HTTP_[1-5][0-9]{2}$').test(error.message)
@@ -149,7 +163,7 @@ async function run() {
       const timestamp = new Date(now).toISOString().replaceAll(/[^0-9]/g, '').slice(0, 14);
       const issued = record(await cloudflare(issuer, base + '/tokens', 'CF_ROTATION_ISSUE_' + role.toUpperCase(), {
         name: 'ajou-study-hub-public-' + role + '-' + timestamp,
-        expires_on: expiresOn,
+        expires_on: expiresOn.replace('.000Z', 'Z'),
         policies,
       }));
       if (typeof issued.value !== 'string' || !/^[a-zA-Z0-9_-]{20,512}$/.test(issued.value))
