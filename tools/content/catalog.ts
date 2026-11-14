@@ -9,22 +9,40 @@ const id = (kind: string, course: string, path: string) =>
   createHash("sha256")
     .update(course + "/" + path.replaceAll("\\", "/").normalize("NFC"))
     .digest("hex");
-export function documentTitle(html: string, fallback: string): string {
-  const visit = (node: DefaultTreeAdapterMap["node"]): string | null => {
-    if ("tagName" in node && node.tagName === "title")
-      return node.childNodes
-        .map((n) => ("value" in n ? n.value : ""))
-        .join("")
-        .trim();
-    if ("childNodes" in node)
-      for (const child of node.childNodes) {
-        const found = visit(child);
-        if (found !== null) return found;
-      }
-    return null;
-  };
-  return visit(parse(html)) || fallback;
+
+function* elementsByTag(
+  node: DefaultTreeAdapterMap["node"],
+  tag: string,
+): Generator<DefaultTreeAdapterMap["element"], void> {
+  if ("tagName" in node && node.tagName === tag) yield node;
+  if ("childNodes" in node)
+    for (const child of node.childNodes) yield* elementsByTag(child, tag);
 }
+
+function textContent(node: DefaultTreeAdapterMap["node"]): string {
+  if ("value" in node) return node.value;
+  if ("tagName" in node && (node.tagName === "script" || node.tagName === "style"))
+    return "";
+  return "childNodes" in node ? node.childNodes.map(textContent).join("") : "";
+}
+
+function titleFromTree(
+  tree: DefaultTreeAdapterMap["document"],
+  fallback: string,
+): string {
+  const title = elementsByTag(tree, "title").next().value;
+  if (!title) return fallback;
+  const text = title.childNodes
+    .map((node) => ("value" in node ? node.value : ""))
+    .join("")
+    .trim();
+  return text || fallback;
+}
+
+export function documentTitle(html: string, fallback: string): string {
+  return titleFromTree(parse(html), fallback);
+}
+
 export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
   const catalog: Catalog = {
     version: 1,
@@ -37,6 +55,7 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
     groups: [],
     documents: [],
   };
+  const noteHeadings = new Map<Group, Set<string>>();
   for (const entry of snapshot.catalogInputs) {
     const config = snapshot.configs.find((c) => c.id === entry.courseId)!;
     let group = catalog.groups.find(
@@ -60,21 +79,34 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
         order: 0,
       };
       catalog.groups.push(group);
+      if (rule.kind === "date" && rule.title === undefined)
+        noteHeadings.set(group, new Set());
     }
     const basename = posix.basename(entry.sourcePath);
+    const type =
+      config.typeRules.find((r) => new RegExp(r.pattern).test(basename))
+        ?.type ?? "other";
+    const tree = parse(
+      new TextDecoder().decode(await snapshot.readFile(entry.courseId, entry.sourcePath)),
+    );
+    const candidates = noteHeadings.get(group);
+    if (type === "note" && candidates) {
+      for (const heading of elementsByTag(tree, "h1")) {
+        const topic = textContent(heading)
+          .normalize("NFC")
+          .replace(/\s+/g, " ")
+          .trim()
+          .replace(/\s*—\s*5살도 이해하는 정리노트$/, "");
+        if (topic && topic !== group.title && topic !== "정리노트")
+          candidates.add(topic);
+      }
+    }
     catalog.documents.push({
       id: id("document", entry.courseId, entry.sourcePath),
       courseId: entry.courseId,
       groupId: group.id,
-      title: documentTitle(
-        new TextDecoder().decode(
-          await snapshot.readFile(entry.courseId, entry.sourcePath),
-        ),
-        basename.replace(/\.html?$/i, ""),
-      ),
-      type:
-        config.typeRules.find((r) => new RegExp(r.pattern).test(basename))
-          ?.type ?? "other",
+      title: titleFromTree(tree, basename.replace(/\.html?$/i, "")),
+      type,
       sourcePath: entry.sourcePath,
       url:
         "/content/" +
@@ -88,6 +120,9 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
       listed: true,
     });
   }
+  for (const [group, headings] of noteHeadings)
+    if (headings.size === 1) group.title = [...headings][0]!;
+
   const rank: Record<Group["kind"], number> = {
     date: 0,
     experiment: 1,

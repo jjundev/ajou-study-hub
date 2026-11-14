@@ -19,6 +19,8 @@ const additionalRoots: Record<string, string[]> = {
     "workbook/pdf/ch10-문제.pdf",
     "workbook/pdf/ch11-문제.pdf",
     "workbook/pdf/ch12-문제.pdf",
+    ".claude/skills/ec2-problem-explain/assets/vendor/pretendard",
+    ".claude/skills/ec2-problem-explain/assets/vendor/katex",
   ],
   "data-structures": [
     "자료구조_강의록_2026/Software_2_Recursion.pdf",

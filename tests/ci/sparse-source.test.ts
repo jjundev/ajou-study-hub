@@ -17,7 +17,11 @@ test('extra files cannot independently authorize an outside root',()=>{
  expect(()=>sparsePatterns({allowedRoots:['allowed'],extraFiles:['elsewhere/private.pdf']})).toThrow('CI_SPARSE_SELECTION_INVALID');
 });
 test.each([
- ['circuits-2', ['/workbook/pdf/ch11-문제.pdf', '/workbook/pdf/ch12-문제.pdf']],
+ ['circuits-2', [
+   '/workbook/pdf/ch11-문제.pdf', '/workbook/pdf/ch12-문제.pdf',
+   '/.claude/skills/ec2-problem-explain/assets/vendor/pretendard',
+   '/.claude/skills/ec2-problem-explain/assets/vendor/katex',
+ ]],
  ['data-structures', ['/자료구조_강의록_2026/Software_7_Tree.pdf', '/자료구조_강의록_2026/Software_8_Heap.pdf']],
  ['ml-basics', ['/강의노트/Lecture06_PCA_Part2.pdf', '/assets/vendor/pretendard', '/assets/vendor/katex']],
 ] as const)('selects the new approved source paths for %s', (id, paths) => {

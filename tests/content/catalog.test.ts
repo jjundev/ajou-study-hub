@@ -78,6 +78,60 @@ test("stable_ids and updates_catalog", async () => {
     await f.dispose();
   }
 });
+
+test("uses the one distinct note heading as the date group title", async () => {
+  const f = await createSourceFixture();
+  try {
+    await f.write(
+      "복습노트/1113/정리노트.html",
+      "<title>정리노트 1113</title><h1> 전류 반송 &amp;\n <em>귀환 극성</em> — 5살도 이해하는 정리노트 </h1>",
+    );
+    await f.write("복습노트/1113/정리노트_별본.html", "<h1>전류 반송 &amp; 귀환 극성</h1>");
+    await f.write("복습노트/1113/문제설명.html", "<h1>다른 문제 제목</h1>");
+    await f.write("복습노트/1114/정리노트.html", "<h1>가우시안 혼합 모델과 책임도</h1>");
+    await f.track();
+    const catalog = await buildCatalog(await inspectSources([f.config], f.settings));
+    expect(catalog.groups.map((group) => group.title)).toEqual([
+      "가우시안 혼합 모델과 책임도",
+      "전류 반송 & 귀환 극성",
+    ]);
+    expect(catalog.documents.find((doc) => doc.sourcePath === "복습노트/1113/정리노트.html")?.title)
+      .toBe("정리노트 1113");
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("keeps the group label when note headings are ambiguous or unavailable", async () => {
+  const f = await createSourceFixture();
+  try {
+    const files = {
+      "1101/정리노트.html": "<h1>전류 반송</h1>",
+      "1101/정리노트_별본.html": "<h1>전압 귀환</h1>",
+      "1102/정리노트.html": "<h1>전류 반송</h1><h1>전압 귀환</h1>",
+      "1103/정리노트.html": "<title>정리노트 1103</title><h1> </h1><h1>1103</h1><h1>정리노트</h1>",
+      "1104/문제설명.html": "<h1>연습 문제</h1>",
+      "1105/정리노트.html": "<h1>자동 후보</h1>",
+      "실험01/실험01_실험설명.html": "<h1>실험 주제</h1>",
+    };
+    for (const [path, html] of Object.entries(files))
+      await f.write(`복습노트/${path}`, html);
+    f.config.groupRules.unshift({ pattern: "^1105$", kind: "date", title: "과목 설정 제목" });
+    await f.track();
+    const catalog = await buildCatalog(await inspectSources([f.config], f.settings));
+    expect(catalog.groups.map((group) => group.title)).toEqual([
+      "과목 설정 제목",
+      "1104",
+      "1103",
+      "1102",
+      "1101",
+      "실험01",
+    ]);
+  } finally {
+    await f.dispose();
+  }
+});
+
 test("sorts dates newest first, experiments numerically, supplements last and rejects invalid dates", async () => {
   const f = await createSourceFixture();
   try {
