@@ -1,0 +1,62 @@
+name: Rotate Cloudflare deployment tokens
+on:
+  schedule:
+    - cron: '19 20 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rotate both tokens even outside the renewal window
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: study-hub-cloudflare-token-rotation
+  cancel-in-progress: false
+jobs:
+  rotate:
+    if: >-
+      github.repository == 'jjundev/ajou-study-hub' &&
+      github.ref == 'refs/heads/main' &&
+      github.workflow_ref == 'jjundev/ajou-study-hub/.github/workflows/cloudflare-token-rotation.yml@refs/heads/main' &&
+      github.workflow_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: cloudflare-token-rotation
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+          package-manager-cache: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Create Study Hub Secrets writer token
+        id: writer
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.STUDY_HUB_ROTATION_APP_ID }}
+          private-key: ${{ secrets.STUDY_HUB_ROTATION_PRIVATE_KEY }}
+          owner: jjundev
+          repositories: ajou-study-hub
+          permission-secrets: write
+      - name: Renew Cloudflare credentials inside the renewal window
+        id: rotation
+        env:
+          CLOUDFLARE_ROTATION_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ROTATION_ACCOUNT_ID }}
+          CLOUDFLARE_ROTATION_TOKEN: ${{ secrets.CLOUDFLARE_ROTATION_TOKEN }}
+          CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ steps.writer.outputs.token }}
+          FORCE_ROTATION: ${{ inputs.force }}
+        run: node tools/ci/cloudflare-token-rotation.ts
+      - name: Run the production deployment using the updated secrets
+        if: steps.rotation.outputs.rotated == 'true' && vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          deployment=$(gh workflow run study-hub-update.yml -R jjundev/ajou-study-hub --ref main -f mode=default)
+          printf '%s\n' "$deployment" >> "$GITHUB_STEP_SUMMARY"
