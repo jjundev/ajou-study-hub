@@ -13,10 +13,14 @@ const id = (kind: string, course: string, path: string) =>
 function* elementsByTag(
   node: DefaultTreeAdapterMap["node"],
   tag: string,
+  skip?: (element: DefaultTreeAdapterMap["element"]) => boolean,
 ): Generator<DefaultTreeAdapterMap["element"], void> {
-  if ("tagName" in node && node.tagName === tag) yield node;
+  if ("tagName" in node) {
+    if (skip?.(node)) return;
+    if (node.tagName === tag) yield node;
+  }
   if ("childNodes" in node)
-    for (const child of node.childNodes) yield* elementsByTag(child, tag);
+    for (const child of node.childNodes) yield* elementsByTag(child, tag, skip);
 }
 
 function textContent(node: DefaultTreeAdapterMap["node"]): string {
@@ -43,6 +47,25 @@ export function documentTitle(html: string, fallback: string): string {
   return titleFromTree(parse(html), fallback);
 }
 
+function noteDescription(tree: DefaultTreeAdapterMap["document"]): string | undefined {
+  const body = elementsByTag(tree, "main").next().value ?? elementsByTag(tree, "body").next().value;
+  if (!body) return undefined;
+  const topics = new Set<string>();
+  const headings = elementsByTag(body, "h2", (element) =>
+    ["aside", "nav", "header", "footer"].includes(element.tagName) ||
+    element.attrs.some(({ name, value }) => name === "hidden" || (name === "aria-hidden" && value === "true")),
+  );
+  for (const heading of headings) {
+    const label = textContent(heading).normalize("NFC").replace(/\s+/g, " ").trim();
+    if (/^0\s*[.)]/u.test(label)) continue;
+    const topic = label.replace(/^\d+\s*[.)]\s*/u, "");
+    if (!topic || /^(?:목차|들어가며|지난 수업 복습|오늘의 큰 그림|(?:한 장 )?요약|예고|다음 시간 예고)(?=$|[\s:：·])/u.test(topic)) continue;
+    topics.add(topic);
+    if (topics.size === 2) break;
+  }
+  return [...topics].join(" · ") || undefined;
+}
+
 export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
   const catalog: Catalog = {
     version: 1,
@@ -56,6 +79,7 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
     documents: [],
   };
   const noteHeadings = new Map<Group, Set<string>>();
+  const descriptionSources = new Map<Group, string>();
   for (const entry of snapshot.catalogInputs) {
     const config = snapshot.configs.find((c) => c.id === entry.courseId)!;
     let group = catalog.groups.find(
@@ -89,6 +113,17 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
     const tree = parse(
       new TextDecoder().decode(await snapshot.readFile(entry.courseId, entry.sourcePath)),
     );
+    if (type === "note" && group.kind === "date") {
+      const source = descriptionSources.get(group);
+      const path = entry.sourcePath.normalize("NFC");
+      if (source === undefined || path < source) {
+        const description = noteDescription(tree);
+        if (description) {
+          group.description = description;
+          descriptionSources.set(group, path);
+        }
+      }
+    }
     const candidates = noteHeadings.get(group);
     if (type === "note" && candidates) {
       for (const heading of elementsByTag(tree, "h1")) {

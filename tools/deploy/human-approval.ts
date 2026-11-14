@@ -48,7 +48,9 @@ function validateCatalog(value: unknown): asserts value is Catalog {
         courses.add(course.id);
     }
     for (const group of value.groups as unknown[]) {
-        exactKeys(group, ['id', 'courseId', 'title', 'sourcePath', 'kind', 'date', 'order']);
+        const required = ['id', 'courseId', 'title', 'sourcePath', 'kind', 'date', 'order'];
+        exactKeys(group, [...required, 'description'], required);
+        if (Object.hasOwn(group, 'description') && !text(group.description)) fail();
         if (!text(group.id) || !text(group.courseId) || !courses.has(group.courseId) || !text(group.title) || !pathValue(group.sourcePath) || !['date', 'experiment', 'supplement'].includes(group.kind as string) || (group.date !== null && !text(group.date)) || !Number.isSafeInteger(group.order) || (group.order as number) < 0 || groups.has(group.id)) fail();
         const key = group.courseId + '/' + group.sourcePath.normalize('NFC'); if (groupPaths.has(key)) fail();
         groups.set(group.id, group.courseId); groupPaths.add(key);

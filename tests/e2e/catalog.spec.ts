@@ -70,6 +70,28 @@ test('generated fixture catalog is served by Vite without route mocks', async ({
   expect(original.ok()).toBe(true);
   expect(await original.text()).toContain('합성');
 });
+
+test('displays and searches an automatic description unless a manual description exists', async ({ page }) => {
+  const copy: Catalog = {
+    version: 1,
+    courses: [{id: 'data-structures', name: '자료구조', repo: 'fixture', semester: '2026-2'}],
+    groups: [
+      {id: 'g1105', courseId: 'data-structures', kind: 'date', date: '2026-11-05', sourcePath: '복습노트/1105', order: 1, title: '자동 제목', description: '탐색과 삽입 · 삭제와 시간복잡도'},
+      {id: 'g1109', courseId: 'data-structures', kind: 'date', date: '2026-11-09', sourcePath: '복습노트/1109', order: 0, title: '자동 제목', description: '덮어쓸 자동 소개'},
+    ],
+    documents: ['1105', '1109'].map(day => ({id: `d${day}`, courseId: 'data-structures', groupId: `g${day}`, type: 'note', title: '정리노트', sourcePath: `복습노트/${day}/정리노트.html`, url: `/content/${day}.html`, listed: true})),
+  };
+  await page.route('**/catalog.json', route => route.fulfill({ json: copy }));
+  await page.goto('/');
+  const tree = page.locator('article').filter({ has: page.getByRole('heading', { name: '이진 탐색 트리', exact: true }) });
+  await expect(tree.getByText('탐색과 삽입 · 삭제와 시간복잡도', { exact: true })).toBeVisible();
+  await expect(page.getByText('우선순위 큐란 · 우선순위 큐 ADT와 최소·최대', { exact: true })).toBeVisible();
+  await expect(page.getByText('덮어쓸 자동 소개')).toHaveCount(0);
+  await page.getByRole('searchbox').fill('시간복잡도');
+  await expect(page.locator('#material-list article')).toHaveCount(1);
+  await expect(tree).toBeVisible();
+});
+
 for (const malformed of ['duplicate course', 'duplicate group', 'duplicate document', 'cross-course group']) test(`rejects ${malformed} and retries`, async ({ page }) => {
   const invalid = structuredClone(catalog);
   if (malformed === 'duplicate course') invalid.courses.push(invalid.courses[0]!);

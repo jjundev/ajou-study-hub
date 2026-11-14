@@ -12,7 +12,7 @@ function isCatalog(value: unknown): value is Catalog {
   if (!courses.every(c => record(c) && strings(c, ['id', 'name', 'repo']) && c.semester === '2026-2')) return false;
   const courseIds = new Set(courses.map(c => c.id));
   if (courseIds.size !== courses.length) return false;
-  if (!groups.every(g => record(g) && strings(g, ['id', 'courseId', 'title', 'sourcePath']) && courseIds.has(g.courseId) && ['date', 'experiment', 'supplement'].includes(g.kind as string) && (g.date === null || typeof g.date === 'string') && typeof g.order === 'number' && Number.isFinite(g.order))) return false;
+  if (!groups.every(g => record(g) && strings(g, ['id', 'courseId', 'title', 'sourcePath']) && (g.description === undefined || typeof g.description === 'string') && courseIds.has(g.courseId) && ['date', 'experiment', 'supplement'].includes(g.kind as string) && (g.date === null || typeof g.date === 'string') && typeof g.order === 'number' && Number.isFinite(g.order))) return false;
   const groupIds = new Set(groups.map(g => g.id));
   if (groupIds.size !== groups.length) return false;
   const groupCourses = new Map(groups.map(g => [g.id, g.courseId]));

@@ -55,6 +55,7 @@ async function checkFixture(kind:string,change?:CatalogChange){
  const assets=kind==='assets-outside-content'?['assets/image.png','assets/book.pdf','assets/font.woff2']:['content/course/.assets/image.png','content/course/book.pdf','content/course/.assets/font.woff2'];
  const bytes=new Map([['index.html','APP'],['404.html','NOT_FOUND'],['assets/app.js','JS'],[listedPath,'HTML'],...(optional?[[unlistedPath,'NESTED'],[assets[0]!,'IMAGE'],[assets[1]!,'PDF'],[assets[2]!,'FONT']]:[])].map(([p,b])=>[p!,Buffer.from('SYNTHETIC_'+b)]));
  const catalog:Catalog={version:1,courses:[{id:'course',name:'Synthetic course',repo:'example/synthetic-course',semester:'2026-2'}],groups:deep?[{id:'group',courseId:'course',title:'Synthetic group',sourcePath:'학습 자료/10 월',kind:'supplement',date:null,order:0}]:[],documents:[listedPath,...optional?[unlistedPath]:[]].map((path,i)=>({id:i===0?'listed-document':'linked-document',courseId:'course',groupId:deep?'group':null,title:i===0?'Main document':'Linked document',type:'note',sourcePath:path.slice('content/course/'.length),url:'/'+path.split('/').map(encodeURIComponent).join('/'),listed:i===0}))};
+ if(kind==='deep-described-date') Object.assign(catalog.groups[0]!,{kind:'date',date:'2026-10-01',description:'첫 주제 · 다음 주제'});
  bytes.set('catalog.json',Buffer.from(JSON.stringify(catalog)));
  let identities=0,policyReads=0,inspectionReads=0,closed=false;
  const inspection={workerId:'immutable-worker-id',versionId:'22222222-2222-2222-2222-222222222222',protectionFingerprint:'a'.repeat(64),snapshot:{accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,allowedEmails:[settings.allowedEmail],workerWide:true,hasBypass:false,hosts:[settings.productionUrl],freePlan:true,fingerprint:'b'.repeat(64),authDomain:'team.cloudflareaccess.com',otpProviderId:'otp-id'}};
@@ -88,7 +89,7 @@ async function checkFixture(kind:string,change?:CatalogChange){
   const manifest=await writeFixture(root,bytes);
   validateManifest(manifest);await assertCurrentBundle(resolve(root,'dist'),manifest,root);expect(await inventory(resolve(root,'dist'))).toEqual(manifest.outputs);
   const run=verifyProduction(settings,manifest,resolve(root,'owner.json'),resolve(root,'other.json'));
-  if(['success','browser-env','trusted-login','missing-optional','deep-content','deep-listed-only','unlisted-at-root','assets-outside-content'].includes(kind)){
+  if(deep||['success','browser-env','trusted-login','missing-optional','unlisted-at-root','assets-outside-content'].includes(kind)){
    const evidence=await run;expect(evidence.rows.every(r=>r.ownerExact&&r.anonymousBlocked&&r.otherBlocked)).toBe(true);expect(evidence.ownerIdentityHash).not.toBe(evidence.otherIdentityHash);expect(evidence.rows.map(r=>r.kind)).toEqual(optional?['catalog','html','nested-html','image','pdf','font']:['catalog','html']);expect(evidence.absentKinds).toEqual(optional?[]:['nested-html','image','pdf','font']);expect(evidence.rows.every(r=>r.sha256===sha(bytes.get(r.path)!))).toBe(true);expect(JSON.parse(await readFile(resolve(root,'.reports/production-access-evidence.json'),'utf8'))).toEqual(evidence);expect(policyReads).toBe(4);expect(identities).toBe(4);
    expect(evidence.rows.find(r=>r.kind==='html')?.path).toBe(listedPath);
    if(optional)expect(evidence.rows.find(r=>r.kind==='nested-html')?.path).toBe(unlistedPath);
@@ -119,7 +120,7 @@ async function checkFixture(kind:string,change?:CatalogChange){
  }finally{reader.mockRestore();api.mockRestore();launch.mockRestore();vi.unstubAllEnvs();project.root='';await rm(root,{recursive:true,force:true});}
 }
 it.each(['success','browser-env','trusted-login','anonymous-generic-403','other-generic-403','redirect-generic-403','redirect-leak','wrong-login-host','missing-login-marker','missing-optional','owner-bytes','anonymous-leak','other-leak','same-user','wrong-provider','policy-other-allowed','policy-post-change','identity-post-change','inspection-post-change','version-post-change','bundle-post-change'])('checks actual manifest bytes and independent pre/post identity and policy: %s',kind=>checkFixture(kind));
-it.each(['deep-content','deep-listed-only','unlisted-at-root'])('classifies catalog listed metadata independently of HTML path depth: %s',kind=>checkFixture(kind));
+it.each(['deep-content','deep-listed-only','deep-described-date','unlisted-at-root'])('classifies catalog listed metadata independently of HTML path depth: %s',kind=>checkFixture(kind));
 it('probes optional assets from the verified manifest outside content/',()=>checkFixture('assets-outside-content'));
 const invalidCatalogs:{name:string;edit:(catalog:Catalog)=>void}[]=[
  {name:'no listed HTML',edit:c=>{c.documents.forEach(d=>d.listed=false);}},

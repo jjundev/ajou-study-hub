@@ -18,6 +18,7 @@ export type Group = {
   id: string;
   courseId: string;
   title: string;
+  description?: string;
   sourcePath: string;
   kind: "date" | "experiment" | "supplement";
   date: string | null;

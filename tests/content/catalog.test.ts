@@ -132,6 +132,41 @@ test("keeps the group label when note headings are ambiguous or unavailable", as
   }
 });
 
+test("takes up to two distinct lesson topics from the date note body", async () => {
+  const f = await createSourceFixture();
+  try {
+    await f.write("복습노트/1102/정리노트.html", `
+      <aside><h2>목차</h2></aside>
+      <main>
+        <h1>이진 트리의 표현과 순회</h1>
+        <h2>0. 지난 수업 복습</h2>
+        <h2>들어가며: 순회의 필요성</h2>
+        <section hidden><h2>숨긴 소제목</h2></section>
+        <h2>1. 이진 트리를 <em>컴퓨터에</em> 담는 법</h2>
+        <h2>2. 이진 트리를 컴퓨터에 담는 법</h2>
+        <h2>3. 한 장 요약 · 다음 시간 예고</h2>
+        <h2>4. 전위 &amp; 후위 순회</h2>
+        <h2>5. 순회로 계산하기</h2>
+      </main>
+    `);
+    await f.write("복습노트/1102/정리노트_별본.html", "<main><h2>별본의 주제</h2></main>");
+    await f.write("복습노트/1105/정리노트.html", "<h2>1. 탐색과 삽입</h2><h2>2. 요약 · 예고</h2>");
+    await f.write("복습노트/1112/문제설명.html", "<main><h2>문제 소제목</h2></main>");
+    await f.write("복습노트/실험01/실험01_실험설명.html", "<main><h2>실험 절차</h2></main>");
+    f.config.groupRules.unshift({ pattern: "^1102$", kind: "date", title: "수동 제목" });
+    await f.track();
+    const catalog = await buildCatalog(await inspectSources([f.config], f.settings));
+    expect(catalog.groups.map(({ title, description }) => [title, description])).toEqual([
+      ["1112", undefined],
+      ["1105", "탐색과 삽입"],
+      ["수동 제목", "이진 트리를 컴퓨터에 담는 법 · 전위 & 후위 순회"],
+      ["실험01", undefined],
+    ]);
+  } finally {
+    await f.dispose();
+  }
+});
+
 test("sorts dates newest first, experiments numerically, supplements last and rejects invalid dates", async () => {
   const f = await createSourceFixture();
   try {

@@ -41,7 +41,10 @@ function makeLessons(catalog: Catalog, courses: Map<string, Course>): Lesson[] {
     if (!lesson) {
       const folder = group.sourcePath.split('/').at(-1);
       const copy = curated[group.courseId + '/' + folder];
-      lesson = { group, course: courses.get(doc.courseId)!, title: copy?.title ?? group.title, description: copy?.description, documents: [] };
+      lesson = {
+        group, course: courses.get(doc.courseId)!, title: copy?.title ?? group.title,
+        description: copy?.description ?? group.description, documents: [],
+      };
       lessons.set(group.id, lesson);
     }
     lesson.documents.push(doc);
