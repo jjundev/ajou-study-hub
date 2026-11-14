@@ -208,10 +208,16 @@ jobs:
             const errors=report.issues.filter(issue=>issue.severity==='error');
             const allowed=/^runtime-(?:original|copy|external)-(?:http|requestfailed|pageerror|navigation|image|unsettled-request|font-fallback-content|representative-[a-z]+)$/;
             const codes=[...new Set(errors.map(issue=>allowed.test(issue.code)?issue.code:'other'))];
+            const causes=[...new Set(errors.map(({reason})=>{
+              if (/^(?:net::ERR_ABORTED|NS_BINDING_ABORTED|Cancelled|cancelled)$/.test(reason)) return 'request-cancelled';
+              if (/^(?:net::ERR_BLOCKED_BY_ORB|net::ERR_BLOCKED_BY_RESPONSE)$/.test(reason)) return 'blocked-response';
+              if (/^(?:net::ERR_(?:CONNECTION_[A-Z_]+|NAME_NOT_RESOLVED|TIMED_OUT|CERT_[A-Z_]+)|NS_ERROR_[A-Z_]+)$/.test(reason)) return 'network';
+              return 'other';
+            }))];
             const scenarios=report.representatives.scenarios
               .filter(row=>row.passed===false && ['chromium','firefox','webkit'].includes(row.browser) && [390,1440].includes(row.width))
               .map(({browser,width})=>({browser,width}));
-            console.error(JSON.stringify({code:'CI_CONTENT_FAILED',errors:errors.length,kinds:codes,scenarios}));
+            console.error(JSON.stringify({code:'CI_CONTENT_FAILED',errors:errors.length,kinds:codes,causes,scenarios}));
           } catch { console.error('CI_CONTENT_FAILED: verification report unavailable'); }
           NODE
             exit 1
