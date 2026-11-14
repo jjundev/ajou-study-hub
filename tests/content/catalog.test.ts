@@ -2,6 +2,31 @@ import { expect, test } from "vitest";
 import { createSourceFixture } from "../fixtures/source.js";
 import { inspectSources } from "../../tools/content/source.js";
 import { buildCatalog } from "../../tools/content/catalog.js";
+import { courses } from "../../config/courses.js";
+
+test("lists numbered logic lab experiments and excludes draft folders", async () => {
+  const f = await createSourceFixture();
+  try {
+    const paths = ["실험07/실험07_문제설명.html", "실험10/실험10_문제설명.html"];
+    for (const path of [...paths, "실험10-초안/초안.html", "1109/정리노트.html"])
+      await f.write("복습노트/" + path, "");
+    await f.track();
+    const catalog = await buildCatalog(await inspectSources([f.config], f.settings));
+    expect(catalog.groups.filter(group => group.kind === "experiment").map(group => group.title))
+      .toEqual(["실험07", "실험10"]);
+    expect(catalog.documents.filter(doc => doc.type === "explanation").map(doc => doc.sourcePath))
+      .toEqual(paths.map(path => "복습노트/" + path));
+    expect(catalog.documents.some(doc => doc.sourcePath.includes("초안"))).toBe(false);
+
+    const other = courses.find(course => course.id === "life-science")!;
+    const snapshot = await inspectSources([other], { roots: {[other.id]: f.root}, explicitUntracked: {} });
+    const otherCatalog = await buildCatalog(snapshot);
+    expect(otherCatalog.groups.map(group => [group.title, group.kind])).toEqual([["1109", "date"]]);
+    expect(otherCatalog.documents.map(doc => doc.type)).toEqual(["note"]);
+  } finally {
+    await f.dispose();
+  }
+});
 
 test("lists_only_tracked_entry_html and classifies_types", async () => {
   const f = await createSourceFixture();
