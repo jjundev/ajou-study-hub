@@ -202,18 +202,18 @@ jobs:
           npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }
           if ! npm run verify:content -- --sources .local/ci-sources.json > /dev/null 2>&1; then
             node --input-type=module <<'NODE'
-            import {readFile} from 'node:fs/promises';
-            try {
-              const report=JSON.parse(await readFile('.reports/verification.json','utf8'));
-              const errors=report.issues.filter(issue=>issue.severity==='error');
-              const allowed=/^runtime-(?:source|copy|external)-(?:http|requestfailed|pageerror|console|readiness|font-fallback-content)$/;
-              const codes=[...new Set(errors.map(issue=>allowed.test(issue.code)?issue.code:'other'))];
-              const scenarios=report.representatives.scenarios
-                .filter(row=>row.passed===false && ['chromium','firefox','webkit'].includes(row.browser) && [390,1440].includes(row.width))
-                .map(({browser,width})=>({browser,width}));
-              console.error(JSON.stringify({code:'CI_CONTENT_FAILED',errors:errors.length,kinds:codes,scenarios}));
-            } catch { console.error('CI_CONTENT_FAILED: verification report unavailable'); }
-            NODE
+          import {readFile} from 'node:fs/promises';
+          try {
+            const report=JSON.parse(await readFile('.reports/verification.json','utf8'));
+            const errors=report.issues.filter(issue=>issue.severity==='error');
+            const allowed=/^runtime-(?:original|copy|external)-(?:http|requestfailed|pageerror|navigation|image|unsettled-request|font-fallback-content|representative-[a-z]+)$/;
+            const codes=[...new Set(errors.map(issue=>allowed.test(issue.code)?issue.code:'other'))];
+            const scenarios=report.representatives.scenarios
+              .filter(row=>row.passed===false && ['chromium','firefox','webkit'].includes(row.browser) && [390,1440].includes(row.width))
+              .map(({browser,width})=>({browser,width}));
+            console.error(JSON.stringify({code:'CI_CONTENT_FAILED',errors:errors.length,kinds:codes,scenarios}));
+          } catch { console.error('CI_CONTENT_FAILED: verification report unavailable'); }
+          NODE
             exit 1
           fi
       - name: Detect surviving processes and trusted checkout changes
