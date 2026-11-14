@@ -131,7 +131,7 @@ async function releaseFixture() {
   }) satisfies typeof fetch);
   return {
     ...f, bundleHash, outputs,
-    run: () => releasePublic({ testProjectRoot: f.root, activationDelays: [] }),
+    run: () => releasePublic({ testProjectRoot: f.root, activationDelays: [], propagationDelays: [0] }),
     report: async () => JSON.parse(await readFile(resolve(f.root, '.reports/public-release.json'), 'utf8')),
   };
 }
@@ -145,6 +145,22 @@ test('publishes the sealed bundle once and records the previous and confirmed ve
     currentVersionId: uploaded, bundleHash: f.bundleHash, checked: f.outputs.length,
   });
   expect(JSON.stringify(await f.report())).not.toContain('test-read-token');
+});
+
+test('waits for public content to catch up to the active version without reuploading', async () => {
+  const f = await releaseFixture();
+  const serve = globalThis.fetch;
+  let reads = 0;
+  vi.stubGlobal('fetch', (async (input, init) => {
+    if (new URL(String(input)).pathname === '/catalog.json' && ++reads === 3) {
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    }
+    return serve(input, init);
+  }) satisfies typeof fetch);
+  await f.run();
+  expect(reads).toBe(4);
+  expect(mocks.upload).toHaveBeenCalledTimes(1);
+  expect(await f.report()).toMatchObject({ status: 'published-public-verified', catalogHash: f.outputs.find(row => row.path === 'catalog.json')!.sha256 });
 });
 
 test.each(['upload', 'version', 'body'])('preserves the receipt on %s failure without uploading again', async mode => {

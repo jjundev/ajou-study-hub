@@ -2,8 +2,8 @@
 
 ## 운영 주소에 수동 공개 게시
 
-현재 운영 주소는 비로그인 요청을 받습니다. 첫 공개 갱신은 기존 Worker
-`ajou-study-hub`에 수동으로 게시합니다. 운영 주소 하나를 사용하며 preview,
+운영 주소는 비로그인 요청을 받습니다. 일반 갱신에는 [자동 갱신](automatic-updates.md)을 사용합니다.
+수동 배포가 필요하면 기존 Worker `ajou-study-hub`에 게시합니다. 운영 주소 하나를 사용하며 preview,
 커스텀 도메인, zone route가 비활성 상태인지 확인합니다.
 
 1. [자동 갱신 운영](automatic-updates.md)에 따라 `STUDY_HUB_AUTOMATIC_UPDATES`를

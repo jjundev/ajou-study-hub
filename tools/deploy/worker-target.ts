@@ -122,16 +122,24 @@ export async function readActiveVersion(target: TargetInput, options: ReadOption
     if (!isRecord(result) || !hasOnly(result, ['deployments']) || !Array.isArray(result.deployments) ||
         !result.deployments.length) return fail();
     const count = result.deployments.length;
-    if (info !== undefined && (!isRecord(info) ||
-        !hasOnly(info, ['page', 'total_pages', 'count', 'total_count', 'per_page']) ||
-        (info.page !== undefined && info.page !== 1) ||
-        (info.total_pages !== undefined && info.total_pages !== 1) ||
-        (info.count !== undefined && info.count !== count) ||
-        (info.total_count !== undefined && info.total_count !== count) ||
-        (info.per_page !== undefined && (!Number.isSafeInteger(info.per_page) || Number(info.per_page) < count))))
-      return fail();
+    if (info !== undefined) {
+      if (!isRecord(info) || !hasOnly(info, ['page', 'total_pages', 'count', 'total_count', 'per_page']))
+        return fail();
+      const { page, total_pages: pages, count: pageCount, total_count: total, per_page: perPage } = info;
+      if ((page !== undefined && page !== 1) ||
+          (pageCount !== undefined && pageCount !== count) ||
+          (pages !== undefined && (!Number.isSafeInteger(pages) || Number(pages) < 1)) ||
+          (total !== undefined && (!Number.isSafeInteger(total) || Number(total) < count)) ||
+          (perPage !== undefined && (!Number.isSafeInteger(perPage) || Number(perPage) < count)) ||
+          (pages === 1 && total !== undefined && total !== count) ||
+          (Number(pages) > 1 && (total === count || (perPage !== undefined && perPage !== count))) ||
+          (total !== undefined && perPage !== undefined &&
+            (count !== Math.min(Number(total), Number(perPage)) ||
+              (pages !== undefined && pages !== Math.ceil(Number(total) / Number(perPage))))))
+        return fail();
+    }
 
-    // Cloudflare returns the deployment currently serving traffic first.
+    // The first row on page one is the deployment serving traffic, even when the history continues.
     const current: unknown = result.deployments[0];
     if (!isRecord(current) || !hasOnly(current, ['id', 'strategy', 'versions', 'created_on', 'source', 'author_email', 'annotations']) ||
         typeof current.id !== 'string' || !workerVersionId.test(current.id) || current.strategy !== 'percentage' ||

@@ -174,9 +174,10 @@ test('only final publication receives Cloudflare credentials, after browser/serv
  const steps=(await load()).jobs.verify.steps,publish=steps.at(-1),boundary=steps.findIndex((s:any)=>s.id==='boundary');
  expect(boundary).toBeGreaterThan(steps.findIndex((s:any)=>s.name==='Build and verify the same pinned material checkout'));
  expect(steps.indexOf(publish)).toBeGreaterThan(boundary);
- expect(publish.env).toEqual({STUDY_HUB_DEPLOYMENT_SETTINGS:'${{ vars.STUDY_HUB_DEPLOYMENT_SETTINGS }}',STUDY_HUB_AUTOMATION_BASELINE:'${{ vars.STUDY_HUB_AUTOMATION_BASELINE }}',CLOUDFLARE_API_TOKEN:'${{ secrets.CLOUDFLARE_API_TOKEN }}',CLOUDFLARE_READ_TOKEN:'${{ secrets.CLOUDFLARE_READ_TOKEN }}'});
- expect(publish.run).toContain('validateSettings(settings);validateBaseline(baseline)');
- expect(publish.run).toContain('npm run deploy:automatic');expect(publish.run).not.toMatch(/playwright|chromium|wrangler|deploy:private|ledger/i);
+ expect(publish.env).toEqual({STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS:'${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}',CLOUDFLARE_API_TOKEN:'${{ secrets.CLOUDFLARE_API_TOKEN }}',CLOUDFLARE_READ_TOKEN:'${{ secrets.CLOUDFLARE_READ_TOKEN }}'});
+ expect(publish.run).toContain('validatePublicSettings(settings)');
+ expect(publish.run).toContain("writeFile('.local/public-deployment.json'");
+ expect(publish.run).toContain('npm run deploy:public');expect(publish.run).not.toMatch(/playwright|chromium|wrangler|deploy:private|deploy:automatic|ledger/i);
  expect(publish.run).not.toMatch(/\$\{\{/);expect(publish.run).toContain("{flag:'wx',mode:0o600}");
 });
 
@@ -187,13 +188,22 @@ test('publication summary exports only bounded allowlisted outcomes and fails on
  try{
   await mkdir(join(root,'.reports'));
   const value={status:'upload-started-outcome-unknown',previousVersionId:'11111111-1111-1111-1111-111111111111',bundleHash:'a'.repeat(64),privatePath:'private-canary',token:'secret-canary'};
-  await writeFile(join(root,'.reports','automatic-release.json'),JSON.stringify(value));
+  await writeFile(join(root,'.reports','public-release.json'),JSON.stringify(value));
   const result=await exec(process.execPath,['--input-type=module','--eval',script],{cwd:root,env:{...process.env,GITHUB_STEP_SUMMARY:summary},timeout:30000});
-  expect(result.stdout).toBe('');expect(result.stderr).toBe('');
-  const text=await readFile(summary,'utf8');expect(text).toContain('upload-started-outcome-unknown');expect(text).toContain('"acceptanceComplete":false');expect(text).not.toMatch(/canary|privatePath|token/);
-  await writeFile(join(root,'.reports','automatic-release.json'),JSON.stringify({...value,versionId:'private-canary'}));
+  expect(JSON.parse(result.stdout)).toMatchObject({status:value.status,bundleHash:value.bundleHash});expect(result.stderr).toBe('');
+  const text=await readFile(summary,'utf8');expect(text).toContain('upload-started-outcome-unknown');expect(text).not.toContain('acceptanceComplete');expect(text).not.toMatch(/canary|privatePath|token/);
+  const active = '22222222-2222-2222-2222-222222222222';
+  const catalogHash = 'c'.repeat(64);
+  await writeFile(join(root,'.reports','public-release.json'),JSON.stringify({
+   ...value,status:'published-public-verified',versionId:active,currentVersionId:active,checked:1307,catalogHash,
+  }));
+  await exec(process.execPath,['--input-type=module','--eval',script],{cwd:root,env:{...process.env,GITHUB_STEP_SUMMARY:summary},timeout:30000});
+  const published = await readFile(summary,'utf8');
+  expect(published).toContain('"checked":1307');
+  expect(published).toContain(catalogHash);
+  await writeFile(join(root,'.reports','public-release.json'),JSON.stringify({...value,versionId:'private-canary'}));
   const invalid=await exec(process.execPath,['--input-type=module','--eval',script],{cwd:root,env:{...process.env,GITHUB_STEP_SUMMARY:summary},timeout:30000}).then(()=>({code:0,stderr:''}),error=>({code:error.code,stderr:error.stderr}));
   expect(invalid).toEqual({code:1,stderr:'CI_PUBLICATION_RECEIPT_UNAVAILABLE_INSPECT_CURRENT_TARGET\n'});
-  expect(await readFile(summary,'utf8')).toBe(text);
+  expect(await readFile(summary,'utf8')).toBe(published);
  }finally{await rm(root,{recursive:true,force:true});}
 });

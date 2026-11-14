@@ -28,9 +28,13 @@ const types: Record<string, RegExp> = {
   '.eot': /^application\/vnd\.ms-fontobject$/,
 };
 
-class PublicProbeError extends Error {}
-function rejectProbe(path: string, reason: string): never {
-  throw new PublicProbeError(`Public response for ${path}: ${reason}`);
+class PublicProbeError extends Error {
+  constructor(message: string, readonly mayBePropagating: boolean) {
+    super(message);
+  }
+}
+function rejectProbe(path: string, reason: string, mayBePropagating = false): never {
+  throw new PublicProbeError(`Public response for ${path}: ${reason}`, mayBePropagating);
 }
 
 function anonymousProbe(origin: string, options: ProbeOptions) {
@@ -68,7 +72,7 @@ function anonymousProbe(origin: string, options: ProbeOptions) {
 
 type Probe = ReturnType<typeof anonymousProbe>;
 function assertResponse(response: Response, path: string, expectedStatus: number, typePath = path): void {
-  if (response.status !== expectedStatus) rejectProbe(path, `unexpected HTTP ${response.status}`);
+  if (response.status !== expectedStatus) rejectProbe(path, `unexpected HTTP ${response.status}`, expectedStatus === 200 && response.status === 404);
   const mime = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
   const expectedMime = types[posix.extname(typePath).toLowerCase()];
   if (expectedMime && !expectedMime.test(mime)) rejectProbe(path, 'unexpected media type');
@@ -83,7 +87,7 @@ async function streamBody(response: Response, path: string, limit: number, consu
         const { done, value } = await reader.read();
         if (done) break;
         size += value.byteLength;
-        if (size > limit) rejectProbe(path, 'body exceeds expected size');
+        if (size > limit) rejectProbe(path, 'body exceeds expected size', true);
         consume(value);
       }
     } finally {
@@ -130,7 +134,7 @@ export async function verifyPublicDeployment(
       assertResponse(response, path, row.path === '404.html' ? 404 : 200, row.path);
       const hash = createHash('sha256');
       const size = await streamBody(response, path, row.size, bytes => hash.update(bytes));
-      if (size !== row.size || hash.digest('hex') !== row.sha256) rejectProbe(path, 'body does not match the sealed bundle');
+      if (size !== row.size || hash.digest('hex') !== row.sha256) rejectProbe(path, 'body does not match the sealed bundle', true);
     });
   };
 
@@ -174,7 +178,11 @@ async function verifyExistingPublicSite(origin: string) {
     rejectProbe('/catalog.json', 'unexpected catalog schema');
 }
 
-type ReleaseOptions = { testProjectRoot?: string; activationDelays?: number[] };
+type ReleaseOptions = {
+  testProjectRoot?: string;
+  activationDelays?: number[];
+  propagationDelays?: number[];
+};
 
 /** Publish exactly once. Only active-version and anonymous HTTP reads can retry. */
 export async function releasePublic(options: ReleaseOptions = {}) {
@@ -191,6 +199,7 @@ export async function releasePublic(options: ReleaseOptions = {}) {
   if (!readToken || !writeToken) throw Error('Public release requires Cloudflare read and write tokens');
   const api = { token: readToken };
   const activationDelays = options.activationDelays ?? [1000, 2000, 4000, 8000];
+  const propagationDelays = options.propagationDelays ?? [5000, 15000, 30000];
 
   await validateReportPath(lockPath, [dist], root);
   const lock = await open(lockPath, 'wx', 0o600);
@@ -229,13 +238,29 @@ export async function releasePublic(options: ReleaseOptions = {}) {
       }
       await record({ ...pending, currentVersionId });
       if (currentVersionId !== receipt.versionId) throw Error('Public upload active version mismatch');
-      const { checked } = await verifyPublicDeployment(target.productionUrl, manifest);
+      let checked: number;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          ({ checked } = await verifyPublicDeployment(target.productionUrl, manifest));
+          break;
+        } catch (error) {
+          const wait = propagationDelays[attempt];
+          if (!(error instanceof PublicProbeError) || !error.mayBePropagating || wait === undefined) throw error;
+          await delay(wait);
+          currentVersionId = await readActiveVersion(target, api);
+          if (currentVersionId !== receipt.versionId) {
+            await record({ ...pending, currentVersionId });
+            throw Error('Active version changed before public response verification could retry');
+          }
+        }
+      }
       currentVersionId = await readActiveVersion(target, api);
       if (currentVersionId !== receipt.versionId) {
         await record({ ...pending, currentVersionId });
         throw Error('Active version changed during public response verification');
       }
-      const result = { ...base, versionId: receipt.versionId, currentVersionId, checked };
+      const catalogHash = manifest.outputs.find(row => row.path === 'catalog.json')!.sha256;
+      const result = { ...base, versionId: receipt.versionId, currentVersionId, checked, catalogHash };
       await record({ ...result, status: 'published-public-verified' });
       return result;
     }, { publicTarget: target });

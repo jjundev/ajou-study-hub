@@ -71,6 +71,25 @@ test.each(['unauthorized', 'worker-id', 'host', 'preview', 'domain', 'route'])(
   },
 );
 
+test('reads the active version from the first page of a longer deployment history', async () => {
+  const deployment = {
+    id: '44444444-4444-4444-4444-444444444444',
+    strategy: 'percentage',
+    versions: [{ version_id: versionId, percentage: 100 }],
+  };
+  const older = {
+    id: '55555555-5555-5555-5555-555555555555',
+    strategy: 'percentage',
+    versions: [{ version_id: '66666666-6666-6666-6666-666666666666', percentage: 100 }],
+  };
+  const request: typeof fetch = async () => Response.json({
+    success: true, errors: [],
+    result: { deployments: [deployment, older] },
+    result_info: { page: 1, per_page: 2, count: 2, total_count: 3, total_pages: 2 },
+  });
+  expect(await readActiveVersion(target, { fetch: request, token: 'test-read-token' })).toBe(versionId);
+});
+
 test('rejects a split active deployment', async () => {
   const { options } = api('split');
   await expect(readActiveVersion(target, options)).rejects.toThrow(/active Worker version/);

@@ -1,4 +1,4 @@
-name: Verify pinned study updates
+name: Verify and publish study updates
 on:
   push:
     branches: [main]
@@ -241,8 +241,16 @@ jobs:
       - name: Emit bounded metadata only
         run: |
           node --input-type=module <<'NODE'
-          import {writeFile} from 'node:fs/promises';
-          const summary={appSha:process.env.GITHUB_SHA,counts:{sources:5},code:'VERIFY_ONLY_DETECTION_PASSED'};
+          import {readFile,writeFile} from 'node:fs/promises';
+          const rows=JSON.parse(await readFile('.local/revisions.json','utf8'));
+          const courseIds=['logic-lab','life-science','circuits-2','data-structures','ml-basics'];
+          if(!Array.isArray(rows)||rows.length!==courseIds.length)throw Error('CI_SUMMARY_REJECTED');
+          const sourceShas=Object.fromEntries(courseIds.map(courseId=>{
+            const matches=rows.filter(row=>row?.courseId===courseId);
+            if(matches.length!==1||typeof matches[0].sha!=='string'||!/^[a-f0-9]{40}$/.test(matches[0].sha))throw Error('CI_SUMMARY_REJECTED');
+            return [courseId,matches[0].sha];
+          }));
+          const summary={appSha:process.env.GITHUB_SHA,counts:{sources:5},sourceShas,code:'VERIFICATION_PASSED'};
           const bytes=JSON.stringify(summary)+'\n';
           if(!/^[a-f0-9]{40}$/.test(summary.appSha)||Buffer.byteLength(bytes)>1048576)throw Error('CI_SUMMARY_REJECTED');
           await writeFile('ci-summary.json',bytes,{flag:'wx'});
@@ -256,40 +264,70 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: false
-      - name: Publish the verified sealed bundle only when explicitly enabled
+      - name: Publish the verified bundle to the public Worker
         id: publish
         if: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' }}
         env:
-          STUDY_HUB_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_DEPLOYMENT_SETTINGS }}
-          STUDY_HUB_AUTOMATION_BASELINE: ${{ vars.STUDY_HUB_AUTOMATION_BASELINE }}
+          STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
         run: |
           node --import tsx --input-type=module <<'NODE'
-          import {mkdir,writeFile,lstat} from 'node:fs/promises';
-          import {validateSettings} from './tools/deploy/access.ts';
-          import {validateBaseline} from './tools/deploy/access-baseline.ts';
+          import { lstat, writeFile } from 'node:fs/promises';
+          import { validatePublicSettings } from './tools/deploy/worker-target.ts';
           try {
-            const parse=(key)=>{const text=process.env[key];if(!text||Buffer.byteLength(text)>65536)throw Error();return JSON.parse(text);};
-            const settings=parse('STUDY_HUB_DEPLOYMENT_SETTINGS'),baseline=parse('STUDY_HUB_AUTOMATION_BASELINE');
-            validateSettings(settings);validateBaseline(baseline);
-            for(const directory of ['.local','.reports']){await mkdir(directory,{recursive:true});if((await lstat(directory)).isSymbolicLink())throw Error();}
-            await writeFile('.local/deployment.json',JSON.stringify(settings),{flag:'wx',mode:0o600});
-            await writeFile('.reports/automation-baseline.json',JSON.stringify(baseline),{flag:'wx',mode:0o600});
-          } catch {console.error('CI_DEPLOYMENT_CONFIGURATION_REJECTED');process.exitCode=1;}
+            const text = process.env.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS;
+            if (!text || Buffer.byteLength(text) > 4096) throw Error();
+            const settings = JSON.parse(text);
+            validatePublicSettings(settings);
+            if (!(await lstat('.local')).isDirectory()) throw Error();
+            await writeFile('.local/public-deployment.json', JSON.stringify(settings), {flag:'wx',mode:0o600});
+          } catch {
+            console.error('CI_PUBLIC_DEPLOYMENT_CONFIGURATION_REJECTED');
+            process.exitCode = 1;
+          }
           NODE
+          if [ -e .reports/public-release.json ] || [ -L .reports/public-release.json ]; then
+            echo CI_PUBLICATION_RECEIPT_ALREADY_EXISTS
+            exit 1
+          fi
           publication_status=0
-          npm run deploy:automatic > /dev/null 2>&1 || publication_status=$?
+          npm run deploy:public > /dev/null 2>&1 || publication_status=$?
           node --input-type=module <<'NODE'
-          import {readFile,appendFile} from 'node:fs/promises';
+          import { lstat, readFile, appendFile } from 'node:fs/promises';
           try {
-            const text=await readFile('.reports/automatic-release.json','utf8');if(Buffer.byteLength(text)>65536)throw Error();
-            const value=JSON.parse(text),statuses=['prepared-not-uploaded','upload-started-outcome-unknown','uploaded-postcheck-pending','published-protection-verified'];
-            if(!statuses.includes(value.status))throw Error();
-            const safe={status:value.status,acceptanceComplete:false};
-            for(const key of ['versionId','currentVersionId','previousVersionId'])if(value[key]!==undefined){if(typeof value[key]!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value[key]))throw Error();safe[key]=value[key];}
-            if(value.bundleHash!==undefined){if(typeof value.bundleHash!=='string'||!/^[a-f0-9]{64}$/.test(value.bundleHash))throw Error();safe.bundleHash=value.bundleHash;}
-            await appendFile(process.env.GITHUB_STEP_SUMMARY,'Automatic publication outcome (human acceptance remains separate):\n\n```json\n'+JSON.stringify(safe)+'\n```\n');
-          } catch {console.error('CI_PUBLICATION_RECEIPT_UNAVAILABLE_INSPECT_CURRENT_TARGET');process.exitCode=1;}
+            const path = '.reports/public-release.json';
+            const stat = await lstat(path);
+            if (!stat.isFile() || stat.size > 4096) throw Error();
+            const text = await readFile(path, 'utf8');
+            if (Buffer.byteLength(text) > 4096) throw Error();
+            const receipt = JSON.parse(text);
+            const statuses = ['upload-started-outcome-unknown', 'uploaded-postcheck-pending', 'published-public-verified'];
+            if (!statuses.includes(receipt.status)) throw Error();
+            const sha256 = /^[a-f0-9]{64}$/;
+            const safe = { status: receipt.status };
+            for (const key of ['versionId', 'currentVersionId', 'previousVersionId']) {
+              if (receipt[key] === undefined) continue;
+              if (typeof receipt[key] !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receipt[key]))
+                throw Error();
+              safe[key] = receipt[key];
+            }
+            if (!safe.previousVersionId || typeof receipt.bundleHash !== 'string' || !sha256.test(receipt.bundleHash))
+              throw Error();
+            safe.bundleHash = receipt.bundleHash;
+            if (receipt.status === 'published-public-verified') {
+              if (!safe.versionId || safe.currentVersionId !== safe.versionId ||
+                  !Number.isSafeInteger(receipt.checked) || receipt.checked < 3 || receipt.checked > 20000 ||
+                  typeof receipt.catalogHash !== 'string' || !sha256.test(receipt.catalogHash)) throw Error();
+              safe.checked = receipt.checked;
+              safe.catalogHash = receipt.catalogHash;
+            }
+            const summary = 'Public deployment outcome\n\n```json\n' + JSON.stringify(safe) + '\n```\n';
+            await appendFile(process.env.GITHUB_STEP_SUMMARY, summary);
+            console.log(JSON.stringify(safe));
+          } catch {
+            console.error('CI_PUBLICATION_RECEIPT_UNAVAILABLE_INSPECT_CURRENT_TARGET');
+            process.exitCode = 1;
+          }
           NODE
           if [ "$publication_status" -ne 0 ]; then echo CI_AUTOMATIC_PUBLICATION_FAILED_INSPECT_CURRENT_TARGET; exit 1; fi
