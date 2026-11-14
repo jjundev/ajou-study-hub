@@ -25,6 +25,49 @@ test("limits", () => {
     checkBundle([{ path: "x.pdf", size: 25 * 1024 * 1024 + 1 }], limits),
   ).not.toEqual([]);
 });
+test("publishes only selected review question PDFs as lesson downloads", async () => {
+  const f = await createSourceFixture();
+  const outputDir = resolve(".generated/review-pdfs-" + Date.now());
+  const problemPaths = [
+    "복습노트/1024/.pack/복습문제_1024_트리 순회-문제.pdf",
+    "복습노트/1025/복습문제_1025_힙-문제.pdf",
+    "복습노트/실험02/실험02_기출문제.pdf",
+  ];
+  const ignoredPaths = [
+    "복습노트/1024/복습문제_1024_트리 순회-답안.pdf",
+    "복습노트/1024/확인문제_1024_트리 순회-문제.pdf",
+    "복습노트/1024/backup-old/복습문제_1024_트리 순회-문제.pdf",
+    "복습노트/0230/복습문제_0230_잘못된날짜-문제.pdf",
+    "복습노트/1024/복습문제_1024_미추적-문제.pdf",
+  ];
+  try {
+    await f.write("복습노트/1024/복습문제_1024_트리 순회.html", "<title>트리 순회 퀴즈</title>");
+    for (const path of [...problemPaths, ...ignoredPaths.slice(0, -1)])
+      await f.write(path, "%PDF-1.4\nfixture\n");
+    await f.track();
+    await f.write(ignoredPaths.at(-1)!, "%PDF-1.4\nfixture\n");
+    const result = await buildContent({
+      settings: f.settings,
+      configs: [f.config],
+      outputDir,
+      reportDir: resolve(".reports/test-build-review-pdfs"),
+    });
+    expect(result.catalog.documents).toHaveLength(1);
+    expect(result.catalog.groups.map(group => [group.title, group.reviewPdfs])).toEqual([
+      ["1025", [problemPaths[1]]],
+      ["1024", [problemPaths[0]]],
+      ["실험02", [problemPaths[2]]],
+    ]);
+    for (const path of problemPaths)
+      expect(await readFile(resolve(outputDir, "content", f.config.id, path), "utf8"))
+        .toBe("%PDF-1.4\nfixture\n");
+    for (const path of ignoredPaths)
+      await expect(readFile(resolve(outputDir, "content", f.config.id, path))).rejects.toThrow();
+  } finally {
+    await f.dispose();
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
 test("reproducible_output, immutable_sources, no_stale_files and explicit untracked", async () => {
   const f = await createSourceFixture();
   const outputDir = resolve(".generated/test-build-" + Date.now());

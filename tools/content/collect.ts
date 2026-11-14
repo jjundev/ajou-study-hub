@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import type { CourseConfig } from "../../config/courses.js";
-import type { Catalog, DocumentInfo, Issue } from "../../src/content/model.js";
+import { contentUrl, type Catalog, type DocumentInfo, type Issue } from "../../src/content/model.js";
 import type { SourceSnapshot } from "./source.js";
 import { resolveReference, sourcePath } from "./paths.js";
 import { extractReferences, extractBase } from "./references.js";
@@ -29,6 +29,9 @@ export async function collectDependencies(
     courseId: d.courseId,
     path: d.sourcePath,
   }));
+  for (const group of catalog.groups)
+    for (const path of group.reviewPdfs ?? [])
+      queue.push({ courseId: group.courseId, path });
   for (const config of configs)
     for (const path of config.extraFiles)
       queue.push({ courseId: config.id, path });
@@ -97,15 +100,7 @@ export async function collectDependencies(
               new RegExp(r.pattern).test(posix.basename(item.path)),
             )?.type ?? "other",
           sourcePath: item.path,
-          url:
-            "/content/" +
-            item.courseId +
-            "/" +
-            item.path
-              .normalize("NFC")
-              .split("/")
-              .map(encodeURIComponent)
-              .join("/"),
+          url: contentUrl(item.courseId, item.path),
           listed: false,
         });
       }

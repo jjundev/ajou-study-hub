@@ -27,7 +27,7 @@ export async function fixture(){
  const root=resolve('.generated/verification-tests',randomUUID());roots.push(root);
  async function put(path:string,value:unknown){await mkdir(dirname(resolve(root,path)),{recursive:true});await writeFile(resolve(root,path),typeof value==='string'?value:JSON.stringify(value));}
  const docs=representativePaths.map(([courseId,sourcePath],i)=>({id:'doc-'+i,courseId,sourcePath,url:'/content/'+courseId+'/'+sourcePath.split('/').map(encodeURIComponent).join('/'),listed:true}));
- await put('dist/index.html','app');await put('dist/assets/app.js','app');await put('dist/catalog.json',{documents:docs});
+ await put('dist/index.html','app');await put('dist/assets/app.js','app');await put('dist/catalog.json',{groups:[],documents:docs});
  for(const doc of docs)await put('dist/'+decodeURIComponent(doc.url.slice(1)),'synthetic html');
  await put('.local/deployment.json',settings);await put('wrangler.jsonc',{name:'ajou-study-hub',compatibility_date:'2026-10-24',assets:{directory:'./dist',html_handling:'none',not_found_handling:'404-page'}});await put('config/content-exceptions.json',[]);
  const outputs=await inventory(resolve(root,'dist')),bundleHash=hash(outputs.map(f=>`${f.path}\0${f.sha256}\n`).join(''));

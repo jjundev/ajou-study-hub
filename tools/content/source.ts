@@ -104,22 +104,23 @@ export async function inspectSources(
     for (const p of selected) {
       const parts = p.split("/");
       const content = config.contentRoot.split("/");
-      if (
-        !p.startsWith(config.contentRoot + "/") ||
-        parts.length !== content.length + 2 ||
-        !/\.html?$/i.test(p)
-      )
-        continue;
-      if (
-        parts.some((s) => s.startsWith(".") || /^backup[-_]/i.test(s)) ||
-        /제작/.test(parts.at(-1)!)
-      )
-        continue;
+      if (!p.startsWith(config.contentRoot + "/")) continue;
       const group = parts[content.length]!;
+      const filename = parts.at(-1)!;
+      const depth = parts.length - content.length;
+      const inLesson = depth === 2;
+      const inPack = depth === 3 && parts.at(-2) === ".pack";
+      const reviewPdf =
+        ((inLesson || inPack) && /^복습문제_.+-문제\.pdf$/i.test(filename)) ||
+        (inLesson && filename === `${group}_기출문제.pdf`);
+      if (!(inLesson && /\.html?$/i.test(filename)) && !reviewPdf) continue;
+      if ([...content, group, filename].some(s => s.startsWith(".") || /^backup[-_]/i.test(s)) ||
+          /제작/.test(filename)) continue;
       const rule = config.groupRules.find((r) =>
         new RegExp(r.pattern).test(group),
       );
       if (!rule) continue;
+      if (filename.endsWith("_기출문제.pdf") && rule.kind !== "experiment") continue;
       if (rule.kind === "date") {
         const month = Number(group.slice(0, 2)),
           day = Number(group.slice(2));

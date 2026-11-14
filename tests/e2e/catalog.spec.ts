@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Catalog, MaterialType } from '../../src/content/model.js';
+import { readFile } from 'node:fs/promises';
 
 const names = ['논리회로실험', '생명과학', '전자회로2', '자료구조', '기계학습기초'];
 const catalog: Catalog = {
@@ -69,6 +70,32 @@ test('generated fixture catalog is served by Vite without route mocks', async ({
   const original = await page.request.get(built.documents[0]!.url);
   expect(original.ok()).toBe(true);
   expect(await original.text()).toContain('합성');
+});
+
+test('downloads the review sheet without leaving the lesson list', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 760 });
+  await page.goto('/');
+
+  const search = page.getByRole('searchbox');
+  await search.fill('기계학습기초');
+  const review = page.getByRole('link', { name: /복습문제 · 열기$/ });
+  const pdf = page.getByRole('link', { name: /복습문제 PDF 다운로드$/ });
+  await expect(review).toHaveAttribute('href', /^\/content\/ml-basics\/.*\.html$/);
+  await expect(pdf).toHaveAttribute('href', /^\/content\/ml-basics\/.*\/\.pack\/.*\.pdf$/);
+  const before = page.url();
+  const [download] = await Promise.all([page.waitForEvent('download'), pdf.click()]);
+  expect(download.suggestedFilename().normalize('NFC')).toBe('복습문제_1001_트리 순회-문제.pdf');
+  expect(await readFile((await download.path())!, 'utf8')).toBe('%PDF-1.4\nfixture\n');
+  await expect(page).toHaveURL(before);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+  expect(await page.evaluate(() => localStorage.getItem('study-hub:recent:v1'))).toBeNull();
+
+  await search.fill('전자회로2 복습문제');
+  await page.locator('#type-filter').selectOption('review');
+  await expect(review).toHaveCount(0);
+  await expect(pdf).toBeVisible();
+  await search.fill('논리회로실험');
+  await expect(pdf).toHaveCount(0);
 });
 
 test('displays and searches an automatic description unless a manual description exists', async ({ page }) => {

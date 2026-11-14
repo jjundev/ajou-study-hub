@@ -1,4 +1,4 @@
-import type { Catalog, Course, DocumentInfo, Group, MaterialType } from '../content/model.js';
+import { contentUrl, type Catalog, type Course, type DocumentInfo, type Group, type MaterialType } from '../content/model.js';
 import { formatRoute, parseRoute, type CatalogRoute } from './router.js';
 import lessonCopy from './lesson-copy.json' with { type: 'json' };
 
@@ -18,6 +18,7 @@ type Lesson = {
   title: string;
   description?: string;
   documents: DocumentInfo[];
+  reviewPdfs: string[];
 };
 type BrowsePosition = { hash: string; limit: number; top: number; courseLeft: number };
 
@@ -31,24 +32,28 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, c
 function makeLessons(catalog: Catalog, courses: Map<string, Course>): Lesson[] {
   const groups = new Map(catalog.groups.map(group => [group.id, group]));
   const lessons = new Map<string, Lesson>();
+  function getLesson(group: Group) {
+    let lesson = lessons.get(group.id);
+    if (!lesson) {
+      const folder = group.sourcePath.split('/').at(-1);
+      const copy = curated[group.courseId + '/' + folder];
+      lesson = {
+        group, course: courses.get(group.courseId)!, title: copy?.title ?? group.title,
+        description: copy?.description ?? group.description, documents: [], reviewPdfs: group.reviewPdfs ?? [],
+      };
+      lessons.set(group.id, lesson);
+    }
+    return lesson;
+  }
   for (const doc of catalog.documents) {
     if (!doc.listed) continue;
     const group = (doc.groupId && groups.get(doc.groupId)) || {
       id: doc.courseId + ':extra', courseId: doc.courseId, kind: 'supplement',
       title: '추가 자료', date: null, sourcePath: '', order: Number.MAX_SAFE_INTEGER,
     } satisfies Group;
-    let lesson = lessons.get(group.id);
-    if (!lesson) {
-      const folder = group.sourcePath.split('/').at(-1);
-      const copy = curated[group.courseId + '/' + folder];
-      lesson = {
-        group, course: courses.get(doc.courseId)!, title: copy?.title ?? group.title,
-        description: copy?.description ?? group.description, documents: [],
-      };
-      lessons.set(group.id, lesson);
-    }
-    lesson.documents.push(doc);
+    getLesson(group).documents.push(doc);
   }
+  for (const group of catalog.groups) if (group.reviewPdfs?.length) getLesson(group);
   return [...lessons.values()];
 }
 
@@ -139,7 +144,7 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog) {
   }
 
   function lessonRow(lesson: Lesson) {
-    const { course, group, title, description, documents } = lesson;
+    const { course, group, title, description, documents, reviewPdfs } = lesson;
     const row = element('article', undefined, 'log-row');
     const meta = element('div', undefined, 'group-meta');
     meta.append(element('span', course.name, 'course-label'));
@@ -160,6 +165,19 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog) {
     for (const type of types) {
       for (const doc of documents.filter(item => item.type === type)) {
         links.append(materialLink(doc, false, counts.get(type)! > 1));
+      }
+      if (type !== 'review') continue;
+      for (const path of reviewPdfs) {
+        const filename = path.split('/').at(-1)!.normalize('NFC');
+        const label = '복습문제 PDF';
+        const text = reviewPdfs.length > 1 ? `${label} · ${filename.replace(/(?:-문제)?\.pdf$/i, '')}` : label;
+        const link = element('a', undefined, 'material-link');
+        link.href = contentUrl(course.id, path);
+        link.download = filename;
+        link.setAttribute('aria-label', [course.name, title, filename, `${label} 다운로드`].join(' · '));
+        link.append(element('span', text));
+        link.insertAdjacentHTML('beforeend', '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></svg>');
+        links.append(link);
       }
     }
     body.append(links);
@@ -183,13 +201,15 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog) {
     const result = lessons.flatMap(lesson => {
       const { group, course, title, description } = lesson;
       if ((state.courseId && state.courseId !== course.id) || (state.groupId && state.groupId !== group.id)) return [];
-      const documents = lesson.documents.filter(doc => {
-        if (state.type && doc.type !== state.type) return false;
+      const matches = (type: MaterialType, name: string, path: string) => {
+        if (state.type && type !== state.type) return false;
         if (!tokens.length) return true;
-        const haystack = normalize([course.name, title, description, group.title, group.date, doc.title, doc.sourcePath, labels[doc.type]].join(' '));
+        const haystack = normalize([course.name, title, description, group.title, group.date, name, path, labels[type]].join(' '));
         return tokens.every(token => haystack.includes(token));
-      });
-      return documents.length ? [{ ...lesson, documents }] : [];
+      };
+      const documents = lesson.documents.filter(doc => matches(doc.type, doc.title, doc.sourcePath));
+      const reviewPdfs = lesson.reviewPdfs.filter(path => matches('review', '복습문제 PDF', path));
+      return documents.length || reviewPdfs.length ? [{ ...lesson, documents, reviewPdfs }] : [];
     });
     const direction = state.sort === 'oldest' ? 1 : -1;
     const rank = { date: 0, experiment: 1, supplement: 2 };
@@ -206,7 +226,7 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog) {
     repository.hidden = !course || !!query;
     list.replaceChildren(...result.slice(0, limit).map(lessonRow));
     get('empty-state').hidden = result.length > 0;
-    if (!docs.size) {
+    if (!lessons.length) {
       get('empty-heading').textContent = '아직 등록된 자료가 없어요';
       get('empty-description').textContent = '자료가 추가되면 이곳에서 확인할 수 있어요.';
       get('reset-filters').hidden = true;

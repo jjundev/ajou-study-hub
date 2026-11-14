@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
-import type { Catalog, Group } from "../../src/content/model.js";
+import { contentUrl, type Catalog, type Group } from "../../src/content/model.js";
 import type { SourceSnapshot } from "./source.js";
 const id = (kind: string, course: string, path: string) =>
   kind +
@@ -107,6 +107,10 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
         noteHeadings.set(group, new Set());
     }
     const basename = posix.basename(entry.sourcePath);
+    if (/\.pdf$/i.test(basename)) {
+      (group.reviewPdfs ??= []).push(entry.sourcePath);
+      continue;
+    }
     const type =
       config.typeRules.find((r) => new RegExp(r.pattern).test(basename))
         ?.type ?? "other";
@@ -143,15 +147,7 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
       title: titleFromTree(tree, basename.replace(/\.html?$/i, "")),
       type,
       sourcePath: entry.sourcePath,
-      url:
-        "/content/" +
-        entry.courseId +
-        "/" +
-        entry.sourcePath
-          .normalize("NFC")
-          .split("/")
-          .map(encodeURIComponent)
-          .join("/"),
+      url: contentUrl(entry.courseId, entry.sourcePath),
       listed: true,
     });
   }

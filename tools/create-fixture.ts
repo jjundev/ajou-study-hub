@@ -30,6 +30,13 @@ for (const course of courses) {
     "복습노트/1001/정리노트.html",
     `<!doctype html><title>${course.name} 합성 자료</title><h1>합성 학습 자료</h1><a href="#section">합성 앵커</a><div id="section">합성 본문</div><button onclick="location.hash='section'">합성 스크립트 이동</button>`,
   );
+  if (course.id === 'ml-basics') {
+    await fixture.write('복습노트/1001/복습문제_1001_트리 순회.html', '<title>트리 순회 퀴즈</title>');
+    await fixture.write('복습노트/1001/.pack/복습문제_1001_트리 순회-문제.pdf', '%PDF-1.4\nfixture\n');
+  }
+  if (course.id === 'circuits-2') {
+    await fixture.write('복습노트/1001/복습문제_1001_증폭기-문제.pdf', '%PDF-1.4\nfixture\n');
+  }
   for (const path of course.extraFiles)
     await fixture.write(
       path,

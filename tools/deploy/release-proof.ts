@@ -47,7 +47,11 @@ export async function assertReleaseProof(root:string,directory:string,manifest:B
  const integrity=proof.integrityChecks;
  if(!integrity||integrity.sourceHashesUnchanged!==true||integrity.bundleBytesUnchanged!==true||integrity.sourceTrackingUnchanged!==true||integrity.inputCount!==manifest.inputs.length||integrity.outputCount!==manifest.outputs.length)fail();
  const seen=new Set<string>();
- for(const doc of catalog.documents)if(typeof doc.url!=='string'||!doc.url.startsWith('/content/')||!manifest.outputs.some(f=>'/'+f.path===decodeURIComponent(doc.url)))fail();
+ const outputPaths=new Set(manifest.outputs.map(file=>file.path));
+ for(const doc of catalog.documents)if(typeof doc.url!=='string'||!doc.url.startsWith('/content/')||!outputPaths.has(decodeURIComponent(doc.url.slice(1))))fail();
+ if(!Array.isArray(catalog.groups))fail();
+ for(const group of catalog.groups)for(const pdf of group.reviewPdfs??[])
+  if(!outputPaths.has(`content/${group.courseId}/${pdf.normalize('NFC')}`))fail();
  for(const item of proof.documents){
   const doc=catalog.documents.find(d=>d.id===item.documentId);
   if(!doc||seen.has(item.documentId)||typeof item.title!=='string'||!Number.isSafeInteger(item.images)||item.images<0||!Array.isArray(item.pendingRequests)||item.pendingRequests.length||!Array.isArray(item.responses))fail();

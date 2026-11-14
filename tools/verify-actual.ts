@@ -89,6 +89,8 @@ export async function verifyActual(
     await readFile(resolve(projectRoot, "dist/catalog.json"), "utf8"),
   ) as Catalog;
   const currentCatalog = await buildCatalog(snapshot);
+  if (JSON.stringify(currentCatalog.groups) !== JSON.stringify(catalog.groups))
+    throw Error("Catalog groups differ from current source selection");
   if (
     JSON.stringify(
       currentCatalog.documents

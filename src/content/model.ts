@@ -23,6 +23,7 @@ export type Group = {
   kind: "date" | "experiment" | "supplement";
   date: string | null;
   order: number;
+  reviewPdfs?: string[];
 };
 export type DocumentInfo = {
   id: string;
@@ -48,3 +49,7 @@ export type Issue = {
   reason: string;
   severity: "error" | "warning";
 };
+
+export function contentUrl(courseId: string, sourcePath: string): string {
+  return `/content/${encodeURIComponent(courseId)}/${sourcePath.normalize('NFC').split('/').map(encodeURIComponent).join('/')}`;
+}
