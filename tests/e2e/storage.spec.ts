@@ -57,3 +57,23 @@ test('enumerates stored prototype-name keys while preserving method access', asy
  await page.evaluate(()=>localStorage.clear());
  expect(await page.evaluate(()=>[Object.keys(localStorage),localStorage.length,sessionStorage.getItem('clear')])).toEqual([[],0,'session']);
 });
+
+test('shares the local theme with the library and other groups', async ({ page }) => {
+ await page.route('https://storage.test/**',async route=>{
+  const path = new URL(route.request().url()).pathname;
+  await route.fulfill({contentType:'text/html',body:path==='/library'?'<!doctype html><title>Library</title>':await html('c',path)});
+ });
+ await page.goto('https://storage.test/library');
+ await page.evaluate(()=>localStorage.setItem('od-theme','dark'));
+ await page.goto('https://storage.test/one');
+ expect(await page.evaluate(()=>localStorage.getItem('od-theme'))).toBe('dark');
+ await page.evaluate(()=>{
+  localStorage.setItem('od-theme','light');
+  localStorage.setItem('od-note-read:week','["q1"]');
+  sessionStorage.setItem('od-theme','dark');
+ });
+ await page.goto('https://storage.test/two');
+ expect(await page.evaluate(()=>[localStorage.getItem('od-theme'),localStorage.getItem('od-note-read:week'),sessionStorage.getItem('od-theme')])).toEqual(['light',null,null]);
+ await page.goto('https://storage.test/library');
+ expect(await page.evaluate(()=>localStorage.getItem('od-theme'))).toBe('light');
+});

@@ -41,7 +41,7 @@ test('missing_is_404 without SPA fallback or sensitive files', async ({ request 
 });
 test('empty app and 404 link open catalog', async ({page})=>{
   await page.goto(origin+'/index.html');
-  await expect(page.getByRole('heading', {name:'등록된 자료가 없습니다'})).toBeVisible();
+  await expect(page.getByRole('heading', {name:'아직 등록된 자료가 없어요'})).toBeVisible();
   await page.goto(origin+'/missing.html');
   await page.getByRole('link',{name:'목록으로'}).click();
   await expect(page).toHaveURL(origin+'/index.html#/catalog');

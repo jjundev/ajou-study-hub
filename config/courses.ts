@@ -44,7 +44,7 @@ const groupRules: GroupRule[] = [
   { kind: "supplement", pattern: "^칩 정리$" },
 ];
 const typeRules: TypeRule[] = [
-  { pattern: "^정리노트", type: "note" },
+  { pattern: "^(정리노트|실험\\d{2}_실험설명\\.html$)", type: "note" },
   {
     pattern: "^(복습문제|실험\\d{2}_기출문제|문제풀이\\.html$)",
     type: "review",

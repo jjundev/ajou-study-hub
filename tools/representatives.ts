@@ -4,8 +4,8 @@ import {
   webkit,
   expect,
   type Page,
-  type FrameLocator,
 } from "@playwright/test";
+import { formatRoute } from "../src/app/router.js";
 import type { Catalog } from "../src/content/model.js";
 import { storageNamespace } from "./content/transform.js";
 import type { Observation } from "./verify-content.js";
@@ -77,18 +77,15 @@ export const representativePaths = [
   ["logic-lab", "복습노트/실험01/실험01_기출문제.html"],
   ["circuits-2", "복습노트/0909/문제설명_0909_Cascode_Stage.html"],
 ] as const;
-export async function pagerHistory(page: Page, frame: FrameLocator, settle = trackRepresentativeRequests(page)) {
-  const current = () => frame.locator(".screen.is-current").getAttribute("id");
-  const routeAnchor = () =>
-    page.evaluate(() =>
-      new URLSearchParams(location.hash.split("?")[1] ?? "").get("anchor"),
-    );
+export async function pagerHistory(page: Page, settle = trackRepresentativeRequests(page)) {
+  const current = () => page.locator(".screen.is-current").getAttribute("id");
+  const routeAnchor = () => page.evaluate(() => decodeURIComponent(location.hash.slice(1)));
   const initial = await current();
-  await frame.locator("#pager-next").click();
+  await page.locator("#pager-next").click();
   await expect.poll(current).not.toBe(initial);
   const first = await current();
   await expect.poll(routeAnchor).toBe(first);
-  await frame.locator("#pager-next").click();
+  await page.locator("#pager-next").click();
   await expect.poll(current).not.toBe(first);
   const second = await current();
   await expect.poll(routeAnchor).toBe(second);
@@ -103,8 +100,20 @@ export async function pagerHistory(page: Page, frame: FrameLocator, settle = tra
   await settle();
   await page.reload();
   await expect.poll(current).toBe(second);
+  await expect.poll(routeAnchor).toBe(second);
   return { initial, first, second };
 }
+async function showPanel(page: Page, id: string) {
+  const toggle = page.locator('#toggle-' + id);
+  if (await toggle.getAttribute('aria-expanded') === 'true') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  }
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#panel-' + id)).toBeVisible();
+}
+
 export type Scenario = {
   browser: string;
   width: number;
@@ -193,9 +202,9 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
               const namespace = storageNamespace(doc),
                 range = /\/(\d{4})\//.exec(doc.sourcePath)?.[1];
               await page.addInitScript(
-                ({ namespace, range, filename }) => {
+                ({ namespace, range, filename, documentPath }) => {
                   if (
-                    window === top ||
+                    location.pathname !== documentPath ||
                     sessionStorage.getItem("verification-seeded:" + namespace)
                   )
                     return;
@@ -229,31 +238,29 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                   namespace,
                   range,
                   filename: doc.sourcePath.split("/").at(-1)!,
+                  documentPath: doc.url,
                 },
               );
-              await page.goto(baseUrl + "/#/read/" + doc.id, {
-                waitUntil: "networkidle",
-                timeout: 45000,
-              });
-              const frame = page.frameLocator("iframe");
-              await expect(page.locator("iframe")).toHaveAttribute(
-                "title",
-                doc.title,
-              );
-              await expect(frame.locator("body")).toBeVisible();
-              scenario.checks.push("reader title/body");
+              const documentURL = baseUrl + doc.url;
+              await page.goto(baseUrl + '/' + formatRoute({
+                kind: 'catalog', courseId: doc.courseId, groupId: doc.groupId ?? undefined,
+              }));
+              await page.locator(`#material-list a[data-document="${doc.id}"]`).click();
+              await expect(page).toHaveURL(documentURL);
+              await expect(page.locator("body")).toBeVisible();
+              scenario.checks.push("catalog link opens the source body in the current tab");
               if (range)
                 scenario.checks.push(
                   "malformed native object/array/null values do not prevent source UI",
                 );
               if (sourcePath.includes("기출문제")) {
-                await expect(frame.locator("html")).toHaveAttribute(
+                await expect(page.locator("html")).toHaveAttribute(
                   "data-ready",
                   "true",
                   { timeout: 30000 },
                 );
-                await expect(frame.locator("#book .page")).toHaveCount(12);
-                const imgs = frame.locator("img");
+                await expect(page.locator("#book .page")).toHaveCount(12);
+                const imgs = page.locator("img");
                 expect(await imgs.count()).toBeGreaterThan(0);
                 for (let i = 0; i < (await imgs.count()); i++) {
                   await imgs.nth(i).scrollIntoViewIfNeeded();
@@ -271,16 +278,16 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                   "12 generated workbook pages and every generated image",
                 );
               } else if (sourcePath.includes("인터렉티브")) {
-                await expect(frame.locator("canvas")).toBeVisible();
-                const control = frame.locator("#number-n");
+                await expect(page.locator("canvas")).toBeVisible();
+                const control = page.locator("#number-n");
                 if (!(await control.isVisible()))
-                  await frame
+                  await page
                     .getByRole("button", { name: "조작 패널", exact: true })
                     .click();
                 await expect(control).toBeVisible();
                 const before = await control.inputValue();
                 const canvasPixels = () =>
-                  frame
+                  page
                     .locator("canvas")
                     .evaluate((el) => (el as HTMLCanvasElement).toDataURL());
                 const beforePixels = await canvasPixels();
@@ -288,7 +295,7 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                 await control.press("Tab");
                 await expect(control).not.toHaveValue(before);
                 await expect.poll(canvasPixels).not.toBe(beforePixels);
-                await frame
+                await page
                   .getByRole("button", { name: "설정 처음으로", exact: true })
                   .click();
                 await expect(control).toHaveValue(before);
@@ -296,26 +303,26 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                   "simulation input and reset, canvas rendered",
                 );
               } else {
-                await expect(frame.locator("#pager-next")).toBeVisible();
-                await pagerHistory(page, frame, settle);
+                await expect(page.locator("#pager-next")).toBeVisible();
+                await pagerHistory(page, settle);
                 scenario.checks.push(
-                  "source Next twice, parent back/forward, refresh preserves screen",
+                  "source Next twice, browser back/forward, refresh preserves screen",
                 );
                 if (courseId === "life-science") {
                   for (
                     let i = 0;
                     i < 12 &&
-                    !(await frame.locator(".review-choice:visible").count());
+                    !(await page.locator(".review-choice:visible").count());
                     i++
                   )
-                    await frame.locator("#pager-next").click();
-                  const choice = frame
+                    await page.locator("#pager-next").click();
+                  const choice = page
                     .locator(".review-choice:visible")
                     .first();
                   await choice.click();
                   await expect(choice).toHaveAttribute("aria-expanded", "true");
                   const attempts = () =>
-                    frame.locator("body").evaluate(() =>
+                    page.locator("body").evaluate(() =>
                       Object.keys(sessionStorage)
                         .filter(
                           (k) =>
@@ -337,12 +344,11 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                   );
                   const fresh = await context.newPage();
                   try {
-                    await fresh.goto(baseUrl + "/#/read/" + doc.id, {
+                    await fresh.goto(documentURL, {
                       waitUntil: "networkidle",
                     });
                     expect(
                       await fresh
-                        .frameLocator("iframe")
                         .locator("body")
                         .evaluate(
                           () =>
@@ -357,15 +363,14 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                     await fresh.close();
                   }
                   scenario.checks.push("new tab session has no copied attempt");
-                  await frame.locator("#toggle-right").click();
-                  await expect(frame.locator("#panel-right")).toBeVisible();
+                  await showPanel(page, "right");
                   scenario.checks.push("solution panel user toggle");
                 } else {
                   if (courseId === "ml-basics" || courseId === "circuits-2") {
                     expect(
-                      await frame.locator(".katex").count(),
+                      await page.locator(".katex").count(),
                     ).toBeGreaterThan(0);
-                    await expect(frame.locator(".katex-error")).toHaveCount(0);
+                    await expect(page.locator(".katex-error")).toHaveCount(0);
                     scenario.checks.push(
                       "KaTeX rendered without parse error spans",
                     );
@@ -374,18 +379,20 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                     for (
                       let i = 0;
                       i < 25 &&
-                      !(await frame.locator("#lmap-a:visible").count());
+                      !(await page.locator("#lmap-a:visible").count());
                       i++
                     )
-                      await frame.locator("#pager-next").click();
-                    const value = frame.locator("#lmap-area");
+                      await page.locator("#pager-next").click();
+                    const value = page.locator("#lmap-area");
                     const old = await value.textContent();
-                    await frame.locator("#lmap-a").focus();
-                    await frame.locator("#lmap-a").press("ArrowRight");
+                    await page.locator("#lmap-a").focus();
+                    await page.locator("#lmap-a").press("ArrowRight");
                     await expect(value).not.toHaveText(old!);
                     scenario.checks.push(
                       "linear-map slider updates determinant readout",
                     );
+                    await settle();
+                    await page.goto(baseUrl + "/");
                     const sameDate = await page.evaluate(() =>
                       Object.keys(localStorage)
                         .filter((k) => k.endsWith("od-note-read:1012"))
@@ -406,22 +413,18 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                     );
                   }
                   if (courseId === "circuits-2") {
-                    const problemToggle = frame.locator(
-                      ".screen.is-current .problem-toggle",
-                    );
-                    await problemToggle.click();
-                    await expect(problemToggle).toHaveAttribute(
-                      "aria-expanded",
-                      "true",
-                    );
-                    await expect(
-                      frame.locator(".screen.is-current .problem-pane"),
-                    ).toBeVisible();
-                    await frame.locator("#toggle-right").click();
-                    await expect(frame.locator("#panel-right")).toBeVisible();
-                    scenario.checks.push(
-                      "inline problem reveal button and summary panel user toggle",
-                    );
+                    const dockedProblem = page.locator("#toggle-prob");
+                    if (await dockedProblem.isVisible()) {
+                      await showPanel(page, "prob");
+                      await expect(page.locator("#panel-prob .problem-pane:visible")).toHaveCount(1);
+                    } else {
+                      const problemToggle = page.locator(".screen.is-current .problem-toggle");
+                      await problemToggle.click();
+                      await expect(problemToggle).toHaveAttribute("aria-expanded", "true");
+                      await expect(page.locator(".screen.is-current .problem-pane")).toBeVisible();
+                    }
+                    await showPanel(page, "right");
+                    scenario.checks.push("problem reveal and summary panel user toggle");
                   }
                 }
               }

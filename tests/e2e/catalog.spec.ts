@@ -15,44 +15,35 @@ async function open(page: import('@playwright/test').Page) {
   await page.route('**/catalog.json', route => route.fulfill({ json: catalog }));
   await page.goto('/');
 }
-for (const width of [390, 1440]) test.describe(`responsive_catalog ${width}`, () => {
-  test.use({ viewport: { width, height: width === 390 ? 844 : 900 } });
-  test('browses_courses', async ({ page }) => {
-    await open(page);
-    for (const name of names) await expect(page.getByRole('button', { name: new RegExp(`^${name}`) })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '실험01' })).toBeVisible();
-    await expect(page.getByText('정리노트', { exact: true })).toHaveCount(2);
-    for (const label of ['문제설명', '인터랙티브', '기타 자료']) await expect(page.getByText(label, { exact: true })).toHaveCount(1);
-    await expect(page.getByText('자료 5개', { exact: true })).toBeVisible();
-    await expect(page.locator('[data-material-type=review]')).toHaveCount(0);
-    if (process.env.CATALOG_SCREENSHOTS) await page.screenshot({ path: `.reports/task-5-${width}.png`, fullPage: true });
-    await page.getByRole('button', { name: /생명과학.*1/ }).click();
-    await expect(page.getByRole('heading', { name: '10월 12일' })).toBeVisible();
-    await page.getByRole('button', { name: /생명과학 정리노트/ }).focus();
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('heading', { name: '생명과학 정리노트' })).toBeVisible();
-    if (width === 390) {
-      await expect(page.getByRole('button', { name: '자료 목록 열기' })).toHaveAttribute('aria-expanded', 'false');
-      if (process.env.CATALOG_SCREENSHOTS) await page.screenshot({ path: '.reports/task-5-390-collapsed.png', fullPage: true });
-      await page.getByRole('button', { name: '자료 목록 열기' }).click();
-      await expect(page.getByRole('button', { name: '자료 목록 접기' })).toHaveAttribute('aria-expanded', 'true');
-    }
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  });
-});
-test('searches_metadata_only and empty states', async ({ page }) => {
+test('searches catalog metadata and excludes linked-only content', async ({ page }) => {
   await open(page);
   const search = page.getByRole('searchbox', { name: '자료 검색' });
-  for (const query of ['2026-10-12', '실험01', '전자회로2 정리노트']) {
+  for (const query of ['2026-10-12', '실험01', '정리노트 전자회로2']) {
     await search.fill(query);
-    await expect(page.getByRole('button', { name: /정리노트/ }).first()).toBeVisible();
+    await expect(page.getByRole('link', { name: /정리노트/ }).first()).toBeVisible();
   }
   await search.fill('본문전용검색어');
-  await expect(page.getByText('검색 결과가 없습니다')).toBeVisible();
+  await expect(page.getByText('찾는 자료가 없어요')).toBeVisible();
   await page.getByRole('button', { name: '검색어 지우기' }).click();
   await expect(search).toHaveValue('');
-  await expect(page.getByRole('heading', { name: '실험01' })).toBeVisible();
+  await expect(page.getByRole('heading', {name: '모든 수업'})).toBeVisible();
+  await expect(page.getByRole('button', {name: '수업 더 보기'})).toBeVisible();
 });
+
+test('supports Korean composition and displays the repository for a selected course', async ({ page }) => {
+  await open(page);
+  await page.getByRole('button', {name: '생명과학', exact:true}).click();
+  await expect(page.locator('#course-repository')).toHaveText('fixture');
+  await expect(page.locator('#course-repository')).toBeVisible();
+  const search = page.getByRole('searchbox');
+  await search.dispatchEvent('compositionstart');
+  await search.fill('생명과학 정리노트');
+  await expect(page.getByRole('heading', {name:'생명과학', exact:true})).toBeVisible();
+  await search.dispatchEvent('compositionend');
+  await expect(page.getByRole('heading', {name:'검색 결과'})).toBeVisible();
+  await expect(page.locator('#course-repository')).toBeHidden();
+});
+
 test('empty_and_error_states retry malformed and failed catalog', async ({ page }) => {
   let requests = 0;
   await page.route('**/catalog.json', route => ++requests === 1 ? route.fulfill({ status: 500 }) : requests === 2 ? route.fulfill({ json: { version: 1, courses: [{}], groups: [], documents: [] } }) : route.fulfill({ json: catalog }));
@@ -61,12 +52,12 @@ test('empty_and_error_states retry malformed and failed catalog', async ({ page 
   await page.getByRole('button', { name: '다시 시도' }).click();
   await expect(page.getByRole('alert')).toBeVisible();
   await page.getByRole('button', { name: '다시 시도' }).click();
-  await expect(page.getByRole('heading', { name: '실험01' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '모든 수업' })).toBeVisible();
+  await expect(page.locator('#material-list a')).toHaveCount(4);
 });
 test('generated fixture catalog is served by Vite without route mocks', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('자료 5개', { exact: true })).toBeVisible();
-  for (const name of names) await expect(page.getByRole('button', { name: `${name} 1`, exact: true })).toBeVisible();
+  for (const name of names) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
   const response = await page.request.get('/catalog.json');
   const built = await response.json() as Catalog;
   const original = await page.request.get(built.documents[0]!.url);
@@ -84,32 +75,9 @@ for (const malformed of ['duplicate course', 'duplicate group', 'duplicate docum
   await page.goto('/');
   await expect(page.getByRole('alert')).toContainText('자료 목록을 불러오지 못했습니다');
   await page.getByRole('button', { name: '다시 시도' }).click();
-  await expect(page.getByRole('heading', { name: '실험01' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '모든 수업' })).toBeVisible();
+  await expect(page.locator('#material-list a')).toHaveCount(4);
 });
-test('browse restoration is silent and selection/destroy expose the integration contract', async ({ page }) => {
-  await open(page);
-  const events = await page.evaluate(async catalog => {
-    const modulePath = '/src/app/catalog-view.ts';
-    const { mountCatalog } = await import(modulePath);
-    const root = document.createElement('div'); document.body.replaceChildren(root);
-    const browses: unknown[] = [], selections: string[] = [];
-    const view = mountCatalog(root, catalog, (id: string) => selections.push(id), (state: unknown) => browses.push(state));
-    view.setBrowseState({ courseId: 'c1', groupId: 'g1', query: '2026-10-12' });
-    const countAfterRestore = browses.length;
-    view.setSelection('d1');
-    const title = root.querySelector('main h2')?.textContent;
-    (root.querySelector('.material-button') as HTMLButtonElement).click();
-    (root.querySelector('.group-button') as HTMLButtonElement).click();
-    view.destroy();
-    return { countAfterRestore, title, selections, browses, remaining: root.childElementCount };
-  }, catalog);
-  expect(events.countAfterRestore).toBe(0);
-  expect(events.title).toBe('생명과학 정리노트');
-  expect(events.selections).toEqual(['d1']);
-  expect(events.browses).toHaveLength(1);
-  expect(events.remaining).toBe(0);
-});
-
 test('displays check and comic material type labels for 확인문제 and 학습만화', async ({ page }) => {
   const withTypes = structuredClone(catalog);
   withTypes.documents.push(
@@ -136,6 +104,10 @@ test('displays check and comic material type labels for 확인문제 and 학습�
   );
   await page.route('**/catalog.json', route => route.fulfill({ json: withTypes }));
   await page.goto('/');
-  await expect(page.locator('[data-material-type=check] .material-type')).toHaveText('확인문제');
-  await expect(page.locator('[data-material-type=comic] .material-type')).toHaveText('학습만화');
+  const type = page.getByLabel('자료 유형');
+  for (const [value, label] of [['check','확인문제'],['comic','학습만화']] as const) {
+    await type.selectOption(value);
+    await expect(page.locator('#material-list a')).toHaveCount(1);
+    await expect(page.locator('#material-list a')).toHaveText(label);
+  }
 });

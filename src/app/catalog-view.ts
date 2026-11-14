@@ -1,152 +1,289 @@
-import type { Catalog, DocumentInfo, MaterialType } from '../content/model.js';
+import type { Catalog, Course, DocumentInfo, Group, MaterialType } from '../content/model.js';
+import { formatRoute, parseRoute, type CatalogRoute } from './router.js';
+import lessonCopy from './lesson-copy.json' with { type: 'json' };
 
-export type BrowseState = { courseId?: string; groupId?: string; query?: string };
-const labels: Record<MaterialType, string> = { note: '정리노트', review: '복습문제', check: '확인문제', explanation: '문제설명', interactive: '인터랙티브', comic: '학습만화', other: '기타 자료' };
+const labels: Record<MaterialType, string> = {
+  note: '정리노트', review: '복습문제', check: '확인문제', explanation: '문제설명',
+  interactive: '인터랙티브', comic: '학습만화', other: '기타 자료',
+};
+const courseOrder = ['life-science', 'circuits-2', 'data-structures', 'ml-basics', 'logic-lab'];
+const curated: Record<string, { title: string; description?: string }> = lessonCopy;
+const pageSize = 4;
+const recentKey = 'study-hub:recent:v1';
+const normalize = (value: string) => value.normalize('NFC').toLocaleLowerCase('ko-KR');
+
+type Lesson = {
+  group: Group;
+  course: Course;
+  title: string;
+  description?: string;
+  documents: DocumentInfo[];
+};
+type BrowsePosition = { hash: string; limit: number; top: number; courseLeft: number };
+
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string) {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
   if (className) node.className = className;
   return node;
 }
-function button(text: string, action: () => void, className?: string) {
-  const node = element('button', text, className);
-  node.type = 'button';
-  node.addEventListener('click', action);
-  return node;
+
+function makeLessons(catalog: Catalog, courses: Map<string, Course>): Lesson[] {
+  const groups = new Map(catalog.groups.map(group => [group.id, group]));
+  const lessons = new Map<string, Lesson>();
+  for (const doc of catalog.documents) {
+    if (!doc.listed) continue;
+    const group = (doc.groupId && groups.get(doc.groupId)) || {
+      id: doc.courseId + ':extra', courseId: doc.courseId, kind: 'supplement',
+      title: '추가 자료', date: null, sourcePath: '', order: Number.MAX_SAFE_INTEGER,
+    } satisfies Group;
+    let lesson = lessons.get(group.id);
+    if (!lesson) {
+      const folder = group.sourcePath.split('/').at(-1);
+      const copy = curated[group.courseId + '/' + folder];
+      lesson = { group, course: courses.get(doc.courseId)!, title: copy?.title ?? group.title, description: copy?.description, documents: [] };
+      lessons.set(group.id, lesson);
+    }
+    lesson.documents.push(doc);
+  }
+  return [...lessons.values()];
 }
-export function mountCatalog(root: HTMLElement, catalog: Catalog, onSelect: (documentId: string) => void, onBrowse?: (state: BrowseState) => void) {
-  let state: BrowseState = {};
-  let selected: string | null = null;
-  let readingEntry: string | undefined;
-  let expanded = true;
-  const listed = catalog.documents.filter(d => d.listed);
-  const shell = element('div', undefined, 'workspace');
-  const header = element('header', undefined, 'app-header');
-  const brand = element('div');
-  brand.append(element('h1', '아주 학습 자료실'), element('p', '2026학년도 2학기 · 기기 내 학습 기록'));
-  header.append(brand, element('span', `자료 ${listed.length}개`, 'total-count'));
-  const layout = element('div', undefined, 'workspace-layout');
-  const sidebar = element('aside', undefined, 'catalog-panel');
-  const toggle = button('자료 목록 접기', () => { expanded = !expanded; updateExpanded(); }, 'list-toggle');
-  toggle.setAttribute('aria-controls', 'catalog-body');
-  const body = element('div'); body.id = 'catalog-body';
-  const searchLabel = element('label', '자료 검색'); searchLabel.htmlFor = 'catalog-search';
-  const search = element('input'); search.id = 'catalog-search'; search.type = 'search'; search.placeholder = '과목, 묶음, 제목, 날짜';
-  const hint = element('p', '자료의 제목과 날짜에서 검색합니다.', 'search-hint');
-  const clear = button('검색어 지우기', () => { search.value = ''; update({ ...state, query: '' }); search.focus(); }, 'clear-search');
-  const nav = element('nav'); nav.setAttribute('aria-label', '과목 선택');
-  const groups = element('div', undefined, 'material-groups');
-  const results = element('p', undefined, 'result-count'); results.setAttribute('role', 'status');
-  const reader = element('main', undefined, 'reader-panel'); reader.id = 'reader'; reader.tabIndex = -1;
-  // Selection metadata must not disconnect the live source document.
-  const selection = element('div'); reader.append(selection);
-  body.append(searchLabel, search, hint, clear, element('h2', '과목', 'section-label'), nav, results, groups);
-  sidebar.append(toggle, body); layout.append(sidebar, reader); shell.append(header, layout); root.replaceChildren(shell);
-  search.addEventListener('input', () => update({ ...state, query: search.value }));
-  function updateExpanded() {
-    toggle.textContent = expanded ? '자료 목록 접기' : '자료 목록 열기';
-    toggle.setAttribute('aria-expanded', String(expanded));
-    sidebar.dataset.expanded = String(expanded);
-  }
-  function update(next: BrowseState) { state = { ...next }; render(); onBrowse?.({ ...state }); }
-  function select(doc: DocumentInfo) {
-    selected = doc.id;
-    if (matchMedia('(max-width: 767px)').matches) { expanded = false; updateExpanded(); }
-    renderSelection(); renderGroups(); onSelect(doc.id);
-    reader.focus();
-  }
-  function filtered() {
-    const query = (state.query ?? '').normalize('NFC').trim().toLocaleLowerCase();
-    return listed.filter(doc => {
-      const group = catalog.groups.find(g => g.id === doc.groupId);
-      const course = catalog.courses.find(c => c.id === doc.courseId);
-      return (!state.courseId || doc.courseId === state.courseId) && (!state.groupId || doc.groupId === state.groupId) &&
-        [doc.title, course?.name, group?.title, group?.date].join(' ').normalize('NFC').toLocaleLowerCase().includes(query);
-    });
-  }
-  function renderGroups() {
-    groups.replaceChildren();
-    const docs = filtered();
-    results.textContent = `목록 ${docs.length}개`;
-    if (!docs.length) {
-      groups.append(element('h2', state.query ? '검색 결과가 없습니다' : '등록된 자료가 없습니다'), element('p', '다른 과목을 선택하거나 검색어를 지워 보세요.', 'empty-hint'));
-      return;
-    }
-    for (const course of catalog.courses) {
-      const courseDocs = docs.filter(d => d.courseId === course.id);
-      if (!courseDocs.length) continue;
-      if (!state.courseId) groups.append(element('h2', course.name, 'course-heading'));
-      const groupIds = [...catalog.groups.filter(g => g.courseId === course.id).sort((a,b) => a.order - b.order).map(g => g.id), null];
-      for (const groupId of groupIds) {
-        const entries = courseDocs.filter(d => d.groupId === groupId);
-        if (!entries.length) continue;
-        const group = catalog.groups.find(g => g.id === groupId);
-        const section = element('section', undefined, 'material-group');
-        const heading = element('div', undefined, 'group-heading');
-        const title = element('h3');
-        if (group) {
-          const groupButton = button(group.title, () => update({ ...state, courseId: course.id, groupId: state.groupId === group.id ? undefined : group.id }), 'group-button');
-          groupButton.setAttribute('aria-pressed', String(state.groupId === group.id));
-          title.append(groupButton);
-        } else title.textContent = '추가 자료';
-        heading.append(title, element('span', `${entries.length}개`));
-        if (group?.date) heading.append(element('time', group.date));
-        section.append(heading);
-        for (const doc of entries) {
-          const item = button('', () => select(doc), 'material-button');
-          item.dataset.materialType = doc.type;
-          item.setAttribute('aria-pressed', String(selected === doc.id));
-          item.append(element('span', labels[doc.type], 'material-type'), element('span', doc.title, 'material-title'));
-          section.append(item);
-        }
-        groups.append(section);
-      }
-    }
-  }
-  function renderSelection() {
-    const doc = catalog.documents.find(d => d.id === selected);
-    selection.replaceChildren();
-    if (doc) {
-      selection.append(element('p', catalog.courses.find(c => c.id === doc.courseId)?.name ?? '', 'reader-course'), element('h2', doc.title));
-    } else {
-      const introduction = element('div', undefined, 'reader-introduction');
-      introduction.append(element('h2', '오늘 공부할 자료를 선택하세요'), element('p', '과목과 학습 묶음별로 정리된 자료를 한곳에서 찾아보세요. 제목이나 날짜를 검색해 바로 찾을 수 있습니다.'), element('p', '학습 기록은 현재 브라우저에 저장됩니다.', 'storage-note'));
-      selection.append(introduction);
-    }
-  }
-  function render() {
-    search.value = state.query ?? ''; clear.hidden = !state.query;
-    nav.replaceChildren();
-    const all = button(`전체 과목 ${listed.length}`, () => update({ query: state.query }), 'course-button');
-    all.setAttribute('aria-pressed', String(!state.courseId)); nav.append(all);
-    for (const course of catalog.courses) {
-      const count = listed.filter(d => d.courseId === course.id).length;
-      const item = button(`${course.name} ${count}`, () => update({ courseId: course.id, query: state.query }), 'course-button');
-      item.setAttribute('aria-pressed', String(state.courseId === course.id)); nav.append(item);
-    }
-    renderGroups();
-  }
-  updateExpanded(); render(); renderSelection();
-  return {
-    setSelection(id: string | null, preserveReader = false, entry = id ?? undefined) {
-      const entering = !!id && !!catalog.documents.find(d => d.id === id) && readingEntry !== entry;
-      readingEntry = entry;
-      selected = id;
-      if (preserveReader) {
-        const doc = catalog.documents.find(d => d.id === id);
-        const heading = reader.querySelector('h2');
-        if (heading && doc) heading.textContent = doc.title;
-        const course = reader.querySelector('.reader-course');
-        if (course && doc) course.textContent = catalog.courses.find(c => c.id === doc.courseId)?.name ?? '';
-      } else renderSelection();
-      renderGroups();
-      if (entering && matchMedia('(max-width: 767px)').matches) {
-        expanded = false; updateExpanded();
-        reader.focus({ preventScroll: true });
-        reader.scrollIntoView({ block: 'start' });
-      }
-    },
-    setBrowseState(next: BrowseState) { state = { ...next }; render(); },
-    destroy() { shell.remove(); },
+
+function readRecent(docs: Map<string, DocumentInfo>): string[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(recentKey) ?? '[]');
+    if (Array.isArray(value)) return value.filter(id => typeof id === 'string' && docs.has(id)).slice(0, 8);
+  } catch { /* Ignore malformed or unavailable storage. */ }
+  return [];
+}
+
+export function mountCatalog(root: HTMLElement, catalog: Catalog) {
+  const get = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>('#' + id)!;
+  const courses = new Map(catalog.courses.map(course => [course.id, course]));
+  const orderedCourses = [...courseOrder, ...courses.keys()].filter((id, index, all) => courses.has(id) && all.indexOf(id) === index);
+  const lessons = makeLessons(catalog, courses);
+  const docs = new Map(lessons.flatMap(lesson => lesson.documents.map(doc => [doc.id, doc])));
+  const lessonByDocument = new Map(lessons.flatMap(lesson => lesson.documents.map(doc => [doc.id, lesson])));
+  const nav = get('course-filters');
+  const list = get('material-list');
+  const section = get('materials');
+  const search = get<HTMLInputElement>('material-search');
+  const type = get<HTMLSelectElement>('type-filter');
+  const sort = get<HTMLSelectElement>('sort-order');
+  const loadMore = get<HTMLButtonElement>('load-more');
+  const readRoute = (): CatalogRoute => {
+    const route = parseRoute(location.hash);
+    if (route.kind !== 'catalog') return { kind: 'catalog' };
+    const courseId = route.courseId && courses.has(route.courseId) ? route.courseId : undefined;
+    const group = catalog.groups.find(item => item.id === route.groupId &&
+      (!courseId || item.courseId === courseId));
+    return {
+      ...route,
+      courseId,
+      groupId: group?.id,
+      query: route.query?.slice(0, 160),
+    };
   };
+  let state = readRoute();
+  let limit = pageSize;
+  let composing = false;
+  let recent = readRecent(docs);
+
+  function remember() {
+    const hash = location.hash;
+    const position: BrowsePosition = { hash, limit, top: window.scrollY, courseLeft: nav.scrollLeft };
+    if (parseRoute(hash).kind === 'catalog') {
+      history.replaceState({ browse: position }, '', location.href);
+    }
+  }
+
+  function restore() {
+    const position = history.state?.browse as BrowsePosition | undefined;
+    const saved = position?.hash === location.hash ? position : undefined;
+    limit = saved ? saved.limit : pageSize;
+    recent = readRecent(docs);
+    render();
+    if (saved) {
+      // Layout must exist before restoring the previous viewport.
+      requestAnimationFrame(() => {
+        nav.scrollLeft = saved.courseLeft;
+        window.scrollTo(0, saved.top);
+      });
+    } else if (state.courseId) {
+      nav.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }
+
+  function update(changes: Partial<CatalogRoute>) {
+    state = { ...state, ...changes };
+    limit = pageSize;
+    history.replaceState(null, '', formatRoute(state));
+    render();
+  }
+
+  function materialLink(doc: DocumentInfo, isRecent = false, detailed = false) {
+    const { course, title } = lessonByDocument.get(doc.id)!;
+    const link = element('a', undefined, isRecent ? 'recent-link' : 'material-link');
+    const typeLabel = labels[doc.type];
+    const label = detailed || doc.type === 'interactive' || doc.type === 'other' ? typeLabel + ' · ' + doc.title : typeLabel;
+    link.setAttribute('href', doc.url);
+    link.dataset.document = doc.id;
+    link.dataset.materialType = doc.type;
+    link.setAttribute('aria-label', [course.name, title, doc.title, typeLabel, '열기'].join(' · '));
+    link.append(element('span', isRecent ? [course.name, title, label].join(' · ') : label));
+    link.insertAdjacentHTML('beforeend', '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>');
+    return link;
+  }
+
+  function lessonRow(lesson: Lesson) {
+    const { course, group, title, description, documents } = lesson;
+    const row = element('article', undefined, 'log-row');
+    const meta = element('div', undefined, 'group-meta');
+    meta.append(element('span', course.name, 'course-label'));
+    if (group.date) {
+      const date = element('time', group.date.slice(5).replace('-', '.') + ' 수업', 'group-date num');
+      date.dateTime = group.date;
+      meta.append(date);
+    } else if (group.kind === 'experiment' && title !== group.title) {
+      meta.append(element('span', group.title.replace(/^실험(?=\d)/, '실험 '), 'group-date'));
+    }
+    const body = element('div', undefined, 'group-body');
+    body.append(element('h3', title));
+    if (description) body.append(element('p', description, 'group-description'));
+    const links = element('div', undefined, 'material-links');
+    const counts = new Map<MaterialType, number>();
+    for (const doc of documents) counts.set(doc.type, (counts.get(doc.type) ?? 0) + 1);
+    const types: MaterialType[] = ['note', 'review', 'check', 'explanation', 'interactive', 'comic', 'other'];
+    for (const type of types) {
+      for (const doc of documents.filter(item => item.type === type)) {
+        links.append(materialLink(doc, false, counts.get(type)! > 1));
+      }
+    }
+    body.append(links);
+    row.append(meta, body);
+    return row;
+  }
+
+  function render() {
+    const query = state.query ?? '';
+    const tokens = normalize(query).trim().split(/\s+/).filter(Boolean);
+    const course = state.courseId ? courses.get(state.courseId) : undefined;
+    if (search.value !== query) search.value = query;
+    get('clear-search').hidden = !query;
+    get('search-shortcut').hidden = !!query;
+    type.value = state.type ?? 'all';
+    sort.value = state.sort ?? 'recent';
+    for (const button of nav.querySelectorAll('button')) {
+      button.setAttribute('aria-pressed', String(button.dataset.course === (state.courseId ?? '')));
+    }
+
+    const result = lessons.flatMap(lesson => {
+      const { group, course, title, description } = lesson;
+      if ((state.courseId && state.courseId !== course.id) || (state.groupId && state.groupId !== group.id)) return [];
+      const documents = lesson.documents.filter(doc => {
+        if (state.type && doc.type !== state.type) return false;
+        if (!tokens.length) return true;
+        const haystack = normalize([course.name, title, description, group.title, group.date, doc.title, doc.sourcePath, labels[doc.type]].join(' '));
+        return tokens.every(token => haystack.includes(token));
+      });
+      return documents.length ? [{ ...lesson, documents }] : [];
+    });
+    const direction = state.sort === 'oldest' ? 1 : -1;
+    const rank = { date: 0, experiment: 1, supplement: 2 };
+    result.sort((a, b) => rank[a.group.kind] - rank[b.group.kind] ||
+      direction * ((a.group.date ?? '').localeCompare(b.group.date ?? '') ||
+        (a.group.kind === 'experiment' ? a.group.title.localeCompare(b.group.title, 'ko', { numeric: true }) : 0)) ||
+      orderedCourses.indexOf(a.course.id) - orderedCourses.indexOf(b.course.id) || a.group.order - b.group.order);
+
+    const announcement = get('results-announcement');
+    announcement.textContent = query ? `검색 결과 ${result.length}개 수업을 찾았습니다.` : `${result.length}개 수업의 자료를 표시합니다.`;
+    get('list-heading').textContent = query ? '검색 결과' : course?.name ?? '모든 수업';
+    const repository = get('course-repository');
+    repository.textContent = course?.repo.split('/').at(-1) ?? '';
+    repository.hidden = !course || !!query;
+    list.replaceChildren(...result.slice(0, limit).map(lessonRow));
+    get('empty-state').hidden = result.length > 0;
+    if (!docs.size) {
+      get('empty-heading').textContent = '아직 등록된 자료가 없어요';
+      get('empty-description').textContent = '자료가 추가되면 이곳에서 확인할 수 있어요.';
+      get('reset-filters').hidden = true;
+    }
+    get('list-bottom').hidden = limit >= result.length;
+    const lastDoc = docs.get(recent[0] ?? '');
+    const showRecent = lastDoc && !query && !state.courseId && !state.groupId && !state.type;
+    get('recent-region').hidden = !showRecent;
+    get('recent-link').replaceChildren(...(showRecent ? [materialLink(lastDoc, true)] : []));
+  }
+
+  const courseButtons = ['', ...orderedCourses].map(id => {
+    const button = element('button', courses.get(id)?.name ?? '전체', 'course-button');
+    button.type = 'button';
+    button.dataset.course = id;
+    button.addEventListener('click', () => update({ courseId: id || undefined, groupId: undefined }));
+    return button;
+  });
+  nav.replaceChildren(...courseButtons);
+  get('skip-to-materials').addEventListener('click', event => {
+    event.preventDefault();
+    section.focus({ preventScroll: true });
+    section.scrollIntoView();
+  });
+  const searchChanged = () => {
+    if (search.value !== (state.query ?? '')) update({ query: search.value || undefined });
+  };
+  search.addEventListener('compositionstart', () => { composing = true; });
+  search.addEventListener('compositionend', () => { composing = false; searchChanged(); });
+  search.addEventListener('input', event => { if (!composing && !(event as InputEvent).isComposing) searchChanged(); });
+  get('search-form').addEventListener('submit', event => {
+    event.preventDefault();
+    if (!composing) {
+      searchChanged();
+      section.focus({ preventScroll: true });
+    }
+  });
+  get('clear-search').addEventListener('click', () => { update({ query: undefined }); search.focus(); });
+  type.addEventListener('change', () => update({ type: type.value === 'all' ? undefined : type.value as MaterialType }));
+  sort.addEventListener('change', () => update({ sort: sort.value === 'oldest' ? 'oldest' : undefined }));
+  get('brand-home').addEventListener('click', event => {
+    event.preventDefault();
+    update({ courseId: undefined, groupId: undefined, query: undefined, sort: undefined, type: undefined });
+    window.scrollTo(0, 0);
+    nav.scrollLeft = 0;
+  });
+  get('reset-filters').addEventListener('click', () => {
+    update({ courseId: undefined, groupId: undefined, query: undefined, type: undefined });
+    search.focus({ preventScroll: true });
+  });
+  loadMore.addEventListener('click', () => {
+    const firstNew = limit;
+    limit += pageSize;
+    render();
+    list.children[firstNew]?.querySelector('a')?.focus();
+  });
+  root.addEventListener('click', event => {
+    if (!(event.target instanceof Element) || event.defaultPrevented || event.button !== 0 ||
+        event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const link = event.target.closest<HTMLAnchorElement>('a[data-document]');
+    if (!link) return;
+    remember();
+    const id = link.dataset.document!;
+    recent = [id, ...recent.filter(item => item !== id)].slice(0, 8);
+    try { localStorage.setItem(recentKey, JSON.stringify(recent)); } catch { /* Retain the current visit's choice. */ }
+  });
+  root.addEventListener('keydown', event => {
+    if (event.isComposing || composing) return;
+    if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey &&
+        !(event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]'))) {
+      event.preventDefault();
+      search.focus();
+    }
+    if (event.key === 'Escape' && event.target === search && state.query) {
+      event.preventDefault();
+      update({ query: undefined });
+    }
+  });
+  window.addEventListener('hashchange', () => { state = readRoute(); restore(); });
+  window.addEventListener('pageshow', event => { if (event.persisted) restore(); });
+  window.addEventListener('pagehide', remember);
+  restore();
 }

@@ -23,12 +23,44 @@ export function installStorage(namespace: string, rules: StorageRule[]): void {
   let native:Storage|undefined;
   try {native=window[name];} catch { /* Blocked origin: use memory. */ }
   const memory=new Map<string,string>();
-  // Snapshot only this namespace so a later quota/security failure preserves reads.
-  try {if(native) for(let i=0;i<native.length;i++){const key=native.key(i);if(key?.startsWith(namespace)){const value=native.getItem(key);if(value!==null)memory.set(key.slice(namespace.length),value);}}} catch {native=undefined;}
-  const keys=()=>{if(native)try{const result:string[]=[];for(let i=0;i<native.length;i++){const key=native.key(i);if(key?.startsWith(namespace))result.push(key.slice(namespace.length));}return result;}catch{native=undefined;}return [...memory.keys()];};
-  const get=(key:string):string|null=>{let value:string|null;try{value=native?native.getItem(namespace+key):memory.get(key)??null;}catch{native=undefined;value=memory.get(key)??null;}return value===null?null:normalize(key,value);};
-  const set=(key:string,value:string)=>{memory.set(key,value);try{native?.setItem(namespace+key,value);}catch{native=undefined;}};
-  const remove=(key:string)=>{memory.delete(key);try{native?.removeItem(namespace+key);}catch{native=undefined;}};
+  const sharedTheme = name === 'localStorage' ? 'od-theme' : undefined;
+  const nativeKey = (key: string) => key === sharedTheme ? key : namespace + key;
+  const exposedKey = (key: string) => key === sharedTheme ? key :
+    key.startsWith(namespace) && key.slice(namespace.length) !== sharedTheme ? key.slice(namespace.length) : undefined;
+  // Snapshot accessible keys so a later quota or security failure preserves reads.
+  const snapshotKeys = (storage: Storage) => {
+   const result: string[] = [];
+   for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    const exposed = key === null ? undefined : exposedKey(key);
+    if (exposed !== undefined) result.push(exposed);
+   }
+   return result;
+  };
+  try {
+   if (native) for (const key of snapshotKeys(native)) {
+    const value = native.getItem(nativeKey(key));
+    if (value !== null) memory.set(key, value);
+   }
+  } catch { native = undefined; }
+  const keys = () => {
+   if (native) try { return snapshotKeys(native); } catch { native = undefined; }
+   return [...memory.keys()];
+  };
+  const get = (key: string): string | null => {
+   let value: string | null;
+   try { value = native ? native.getItem(nativeKey(key)) : memory.get(key) ?? null; }
+   catch { native = undefined; value = memory.get(key) ?? null; }
+   return value === null ? null : normalize(key, value);
+  };
+  const set = (key: string, value: string) => {
+   memory.set(key, value);
+   try { native?.setItem(nativeKey(key), value); } catch { native = undefined; }
+  };
+  const remove = (key: string) => {
+   memory.delete(key);
+   try { native?.removeItem(nativeKey(key)); } catch { native = undefined; }
+  };
   const methods:Record<string,(...args:any[])=>any>={
    getItem(key:unknown){if(!arguments.length)throw new TypeError('Storage.getItem requires a key');return get(String(key));},
    setItem(key:unknown,value:unknown){if(arguments.length<2)throw new TypeError('Storage.setItem requires key and value');set(String(key),String(value));},

@@ -1,0 +1,48 @@
+{
+  "life-science/1112": {
+    "title": "뉴런과 시냅스",
+    "description": "뉴런의 세 부분과 신호의 방향 · 신경아교세포와 미엘린 수초"
+  },
+  "life-science/1110": {
+    "title": "원생생물, 식물, 균류와 동물",
+    "description": "지난 수업과 이어 보기 · 한 가지 모습으로 묶을 수 없는 원생생물"
+  },
+  "circuits-2/1111": {
+    "title": "피드백의 감지와 반환",
+    "description": "왜 이런 회로를 쓸까 · 루프는 어디서 끊어도 루프 이득이 같아요"
+  },
+  "circuits-2/1106": {
+    "title": "부귀환과 루프 이득",
+    "description": "왜 이런 회로를 쓸까 · 바이폴라 캐스코드의 세 극점"
+  },
+  "data-structures/1112": {
+    "title": "힙 정렬과 힙의 응용",
+    "description": "힙은 꺼내기 좋게 넣어 두는 자료구조 · heap_sort 프로그램"
+  },
+  "data-structures/1109": {
+    "title": "힙과 우선순위 큐",
+    "description": "우선순위 큐란 · 우선순위 큐 ADT와 최소·최대"
+  },
+  "ml-basics/1111": {
+    "title": "가우시안 혼합 모델",
+    "description": "여러 봉우리에서 하나의 밀도로 · 확률밀도를 읽는 법"
+  },
+  "ml-basics/1104": {
+    "title": "PCA와 행렬 사영",
+    "description": "어떤 축을 남겨야 복원오차가 작아질까? · 고유기저에서 방향 분산 계산하기"
+  },
+  "logic-lab/실험09": {
+    "title": "RAM · 메모리에 쓰고 읽기",
+    "description": "왜 이 회로를 쓰는지 먼저 알아봐요 · RAM: 주소로 칸을 골라 쓰고 읽어요"
+  },
+  "logic-lab/실험08": {
+    "title": "Counter · 클럭으로 세기",
+    "description": "왜 이 회로를 쓰는지 먼저 알아봐요 · 레지스터에서 카운터로: Toggle과 진수"
+  },
+  "data-structures/1102": {
+    "title": "이진 트리의 표현과 순회"
+  },
+  "data-structures/1105": {
+    "title": "이진 탐색 트리"
+  }
+}

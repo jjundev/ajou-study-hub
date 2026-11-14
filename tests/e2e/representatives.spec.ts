@@ -1,6 +1,4 @@
 import { test, expect } from "@playwright/test";
-import { build } from "esbuild";
-import { transformHtml } from "../../tools/content/transform.js";
 import { pagerHistory, trackRepresentativeRequests, confirmCancelledCdnRequest } from "../../tools/representatives.js";
 import type { Catalog, DocumentInfo } from "../../src/content/model.js";
 test("representative pager check requires rendered source history after actual Next actions", async ({
@@ -29,29 +27,15 @@ test("representative pager check requires rendered source history after actual N
     groups: [],
     documents: [doc],
   };
-  const bundle = await build({
-    stdin: {
-      contents:
-        "import {installReaderBridge} from './src/compat/reader-bridge.ts';installReaderBridge(window.__STUDY_HUB__.document.id);",
-      resolveDir: process.cwd(),
-    },
-    bundle: true,
-    format: "iife",
-    write: false,
-  });
   await page.route("**/catalog.json", (r) => r.fulfill({ json: catalog }));
   await page.route("**/content/c/notes/pager.html", (r) =>
     r.fulfill({
       contentType: "text/html",
-      body: transformHtml(
-        `<section id="s0" class="screen is-current">Cover</section><section id="s1" class="screen" hidden>One</section><section id="s2" class="screen" hidden>Two</section><button id="pager-next">Next</button><script>let i=Number(location.hash.slice(2))||0;function render(){document.querySelectorAll('section').forEach((s,n)=>{s.hidden=n!==i;s.className='screen'+(n===i?' is-current':'');});}document.querySelector('button').onclick=()=>{i++;history.pushState(null,'','#s'+i);render();};onpopstate=()=>{i=Number(location.hash.slice(2))||0;render();};render();</script>`,
-        doc,
-        bundle.outputFiles[0]!.text,
-      ),
+      body: `<section id="s0" class="screen is-current">Cover</section><section id="s1" class="screen" hidden>One</section><section id="s2" class="screen" hidden>Two</section><button id="pager-next">Next</button><script>let i=Number(location.hash.slice(2))||0;function render(){document.querySelectorAll('section').forEach((s,n)=>{s.hidden=n!==i;s.className='screen'+(n===i?' is-current':'');});}document.querySelector('button').onclick=()=>{i++;history.pushState(null,'','#s'+i);render();};onpopstate=()=>{i=Number(location.hash.slice(2))||0;render();};render();</script>`,
     }),
   );
   await page.goto("/#/read/" + doc.id);
-  const result = await pagerHistory(page, page.frameLocator("iframe"));
+  const result = await pagerHistory(page);
   expect(result).toEqual({ initial: "s0", first: "s1", second: "s2" });
 });
 
