@@ -34,6 +34,14 @@ Actions 실행 요약에서 `published-public-verified`, 배포 ID와 버전 ID,
 
 로컬에서 실제 자료의 전체 빌드 후 `npm run verify:content -- --sources .local/sources.json`을 먼저 실행하고, 같은 `dist`와 소스에서 `node --import tsx tools/ci/observe-course-verification.ts .local/sources.json life-science`를 실행하면 측정할 수 있습니다. 운영 측정을 끄려면 `STUDY_HUB_COURSE_VERIFICATION`을 지웁니다.
 
+## 변경 과목 브라우저 검증 적용
+
+`STUDY_HUB_COURSE_VERIFICATION=apply`에서 과목 알림을 받으면 변경 과목만 문서별 Chromium 검사를 실행할 수 있습니다. 전체 소스·산출물 무결성 검사와 공통 브라우저 시나리오 42개, 게시 후 전체 파일 응답 검사는 계속 실행합니다. `Material verification` 요약에서 실제 범위와 문서 수, 경과 시간을 확인합니다.
+
+같은 허브 커밋과 현재 운영 버전에 연결된 체크포인트가 필요합니다. 직전 전체 검증 기록은 24시간까지 유효하며, 워크플로에 필요한 1시간을 남겨 둡니다. 생략할 과목의 빌드 산출물 해시와 이전 문서 로딩 때 관찰한 브라우저 요청을 대조합니다. 다른 과목이나 공통 경로에 대한 요청이 있었거나, 산출물이 달라졌거나, 기준 기록이 없으면 전체 검증으로 돌아갑니다. 전체 검증으로 게시하면 기준 시각이 갱신됩니다.
+
+게시 준비 중 운영 버전이 바뀌면 `CI_COURSE_BASELINE_CHANGED_BEFORE_UPLOAD`와 함께 업로드 전에 멈춥니다. Actions의 해당 실행을 다시 실행하면 전체 검증이 적용됩니다. 비교만 하려면 `observe`를 지정하고, 전체 검증으로 게시하려면 변수를 지웁니다.
+
 ## Cloudflare 배포 토큰 갱신
 
 [토큰 갱신 워크플로](https://github.com/jjundev/ajou-study-hub/actions/workflows/cloudflare-token-rotation.yml)는 매일 05:19 KST에 Cloudflare API로 두 Secrets의 유효기간을 확인합니다. 하나라도 만료까지 7일 이하이면 30일짜리 토큰 두 개를 발급하고 사용 가능 여부를 확인한 뒤 같은 이름으로 등록합니다. 이전 토큰은 원래 만료일까지 유효하므로 이미 시작된 배포가 마무리될 수 있습니다. 자동 게시가 켜져 있으면 새 배포 실행을 시작합니다. 갱신 요약에서 새 토큰 만료일과 배포 실행 링크를 확인하고, 연결된 배포에서 `published-public-verified`를 확인합니다. 즉시 갱신하려면 워크플로를 수동으로 실행하고 `force`를 선택합니다.

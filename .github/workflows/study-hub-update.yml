@@ -188,7 +188,7 @@ jobs:
         if: >-
           ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
               (vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'observe' || vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'skip' ||
-               vars.STUDY_HUB_COURSE_VERIFICATION == 'observe') }}
+               vars.STUDY_HUB_COURSE_VERIFICATION == 'observe' || vars.STUDY_HUB_COURSE_VERIFICATION == 'apply') }}
         continue-on-error: true
         env:
           UNCHANGED_DEPLOYMENTS: ${{ vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS }}
@@ -240,10 +240,12 @@ jobs:
         run: node tools/ci/process-boundary.ts probe-processes "$RUNNER_TEMP/study-hub-trusted.json"
       - name: Build and verify the same pinned material checkout
         if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
+        env:
+          COURSE_RELEASE: ${{ steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.course_release || '' }}
         run: |
           npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }
           verify_material() {
-            npm run verify:content -- --sources .local/ci-sources.json > /dev/null 2>&1
+            node --import tsx tools/ci/verify-material.ts
           }
           if ! verify_material; then
             if node --input-type=module <<'RETRY'
@@ -359,6 +361,7 @@ jobs:
           STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+          COURSE_RELEASE: ${{ steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.course_release || '' }}
         run: |
           node --import tsx --input-type=module <<'NODE'
           import { lstat, writeFile } from 'node:fs/promises';
@@ -380,7 +383,8 @@ jobs:
             exit 1
           fi
           publication_status=0
-          npm run deploy:public > /dev/null 2>&1 || publication_status=$?
+          node --import tsx tools/deploy/public-release.ts --automatic > /dev/null 2>&1 || publication_status=$?
+          if [ "$publication_status" -eq 75 ]; then echo CI_COURSE_BASELINE_CHANGED_BEFORE_UPLOAD; exit 1; fi
           node --input-type=module <<'NODE'
           import { lstat, readFile, appendFile } from 'node:fs/promises';
           try {
@@ -428,6 +432,7 @@ jobs:
         env:
           STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
           EXPECTED_PUBLIC_INPUT_HASH: ${{ steps.fingerprint-public-inputs.outputs.input_hash }}
+          COURSE_RELEASE: ${{ steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.course_release || '' }}
         run: node --import tsx tools/ci/public-deployment-checkpoint.ts record
       - name: Upload the public deployment checkpoint
         id: upload-public-checkpoint

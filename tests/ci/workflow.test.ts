@@ -118,7 +118,7 @@ test('source scripts are never invoked and both material commands use explicit s
  const commands=job.steps.filter((s:any)=>s.run).map((s:any)=>s.run).join('\n');
  expect(commands).not.toMatch(/(?:cd|npm\s+--prefix|bash|sh)\s+[^\n]*sources\//);
  expect(commands).toContain('npm run build -- --sources .local/ci-sources.json');
- expect(commands).toContain('npm run verify:content -- --sources .local/ci-sources.json');
+ expect(commands).toContain('node --import tsx tools/ci/verify-material.ts');
  expect(job.if).toContain("github.repository == 'jjundev/ajou-study-hub'");
  expect(job.if).toContain("github.ref == 'refs/heads/main'");
  expect(job.if).toContain('github.workflow_sha == github.sha');
@@ -180,10 +180,12 @@ test('secrets and receipt handling remain bound to their steps',async()=>{
  expect(compare.env.GH_TOKEN).toBe('${{ github.token }}');
  expect(boundary).toBeGreaterThan(steps.findIndex((s:any)=>s.name==='Build and verify the same pinned material checkout'));
  expect(steps.indexOf(publish)).toBeGreaterThan(boundary);
- expect(publish.env).toEqual({STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS:'${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}',CLOUDFLARE_API_TOKEN:'${{ secrets.CLOUDFLARE_API_TOKEN }}',CLOUDFLARE_READ_TOKEN:'${{ secrets.CLOUDFLARE_READ_TOKEN }}'});
+ const permit='${{ steps.compare-public-inputs.outcome == \'success\' && steps.compare-public-inputs.outputs.course_release || \'\' }}';
+ expect(publish.env).toEqual({STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS:'${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}',CLOUDFLARE_API_TOKEN:'${{ secrets.CLOUDFLARE_API_TOKEN }}',CLOUDFLARE_READ_TOKEN:'${{ secrets.CLOUDFLARE_READ_TOKEN }}',COURSE_RELEASE:permit});
+ expect(steps.find((s:any)=>s.name==='Build and verify the same pinned material checkout').env).toEqual({COURSE_RELEASE:permit});
  expect(publish.run).toContain('validatePublicSettings(settings)');
  expect(publish.run).toContain("writeFile('.local/public-deployment.json'");
- expect(publish.run).toContain('npm run deploy:public');expect(publish.run).not.toMatch(/playwright|chromium|wrangler|deploy:private|deploy:automatic|ledger/i);
+ expect(publish.run).toContain('node --import tsx tools/deploy/public-release.ts --automatic');expect(publish.run).not.toMatch(/playwright|chromium|wrangler|deploy:private|deploy:automatic|ledger/i);
  expect(publish.run).not.toMatch(/\$\{\{/);expect(publish.run).toContain("{flag:'wx',mode:0o600}");
  const record=steps.find((s:any)=>s.id==='record-public-checkpoint');
  const upload=steps.find((s:any)=>s.id==='upload-public-checkpoint');
@@ -214,6 +216,8 @@ test('only eligible course updates may skip expensive steps', async () => {
   { name:'updates disabled', enabled:'disabled', published:false, compare:false, skip:false },
   { name:'observe mode', policy:'observe', compare:true, skip:false },
   { name:'course observe with changed inputs', coursePolicy:'observe', match:'false', changed:'life-science', observe:true, compare:true, skip:false },
+  { name:'course apply uses the normal publish path without shadow verification', coursePolicy:'apply', policy:'', match:'false', changed:'circuits-2', compare:true, skip:false },
+  { name:'course apply falls back without a trusted checkpoint', coursePolicy:'apply', policy:'', match:'false', compare:true, skip:false },
   { name:'course observe works independently of unchanged skip', coursePolicy:'observe', policy:'', match:'false', changed:'logic-lab,ml-basics', observe:true, compare:true, skip:false },
   { name:'course observe follows an unchanged skip', coursePolicy:'observe', compare:true, skip:true },
   { name:'course observe without a comparable baseline', coursePolicy:'observe', match:'false', compare:true, skip:false },

@@ -6,6 +6,7 @@ import { fixture } from './release-fixture.js';
 import { inventory } from '../../tools/deploy/bootstrap.js';
 import { releasePublic, verifyPublicDeployment } from '../../tools/deploy/public-release.js';
 import type { BuildReport } from '../../tools/content/report.js';
+import { courseOutputHashes, type CourseRelease } from '../../tools/course-release.js';
 
 const mocks = vi.hoisted(() => ({ readTarget: vi.fn(), readActive: vi.fn(), upload: vi.fn() }));
 vi.mock('../../tools/deploy/worker-target.js', async original => ({
@@ -138,7 +139,7 @@ async function releaseFixture() {
   }) satisfies typeof fetch);
   return {
     ...f, bundleHash, outputs, rollback: () => { deploymentId = rollbackDeployment; },
-    run: () => releasePublic({ testProjectRoot: f.root, activationDelays: [], propagationDelays: [0] }),
+    run: (courseRelease?: CourseRelease) => releasePublic({ testProjectRoot: f.root, activationDelays: [], propagationDelays: [0], courseRelease }),
     report: async () => JSON.parse(await readFile(resolve(f.root, '.reports/public-release.json'), 'utf8')),
   };
 }
@@ -152,6 +153,50 @@ test('publishes the sealed bundle once and records the previous and confirmed ve
     currentVersionId: uploaded, deploymentId: newDeployment, bundleHash: f.bundleHash, checked: f.outputs.length,
   });
   expect(JSON.stringify(await f.report())).not.toContain('test-read-token');
+});
+
+async function scopedReleaseFixture() {
+  const f = await releaseFixture();
+  const plan = {
+    courses: ['logic-lab'], outputHashes: courseOutputHashes(f.outputs), fullVerifiedAt: new Date().toISOString(),
+    baseline: { deploymentId: priorDeployment, versionId: previous },
+  };
+  const proof = JSON.parse(await readFile(resolve(f.root, '.reports/verification.json'), 'utf8'));
+  const catalog = JSON.parse(await readFile(resolve(f.root, 'dist/catalog.json'), 'utf8')) as { documents: { id: string; courseId: string }[] };
+  const ids = catalog.documents.filter(doc => doc.courseId === 'logic-lab').map(doc => doc.id);
+  proof.documents = proof.documents.filter((doc: { documentId: string }) => ids.includes(doc.documentId));
+  Object.assign(proof, { scope: 'changed-course-runtime', courseRelease: plan, documentsChecked: ids.length });
+  await f.put('.reports/verification.json', proof);
+  return { f, proof, plan };
+}
+
+test('publishes a matching scoped proof while still verifying the entire public inventory', async () => {
+  const { f, plan } = await scopedReleaseFixture();
+  await f.run(plan);
+  expect(mocks.upload).toHaveBeenCalledTimes(1);
+  expect(await f.report()).toMatchObject({ status: 'published-public-verified', checked: f.outputs.length });
+});
+
+test.each(['manual', 'scope', 'baseline', 'missing-document', 'common-check', 'integrity', 'output'])('blocks scoped upload with invalid %s evidence', async mode => {
+  const { f, proof, plan } = await scopedReleaseFixture();
+  if (mode === 'scope') proof.courseRelease = { ...plan, courses: ['circuits-2'] };
+  if (mode === 'baseline') proof.courseRelease = { ...plan, baseline: { ...plan.baseline, deploymentId: rollbackDeployment } };
+  if (mode === 'missing-document') proof.documents.pop();
+  if (mode === 'common-check') proof.representatives.scenarios.pop();
+  if (mode === 'integrity') proof.integrityChecks.sourceHashesUnchanged = false;
+  if (mode === 'output') plan.outputHashes['circuits-2'] = '0'.repeat(64);
+  await f.put('.reports/verification.json', proof);
+  await expect(f.run(mode === 'manual' ? undefined : plan)).rejects.toThrow(/runtime\/build proof/);
+  expect(mocks.upload).not.toHaveBeenCalled();
+});
+
+test('stops before upload when the inherited deployment changes after staging', async () => {
+  const { f, plan } = await scopedReleaseFixture();
+  mocks.readActive.mockResolvedValueOnce(plan.baseline).mockResolvedValueOnce(plan.baseline);
+  f.rollback();
+  await expect(f.run(plan)).rejects.toThrow(/previously verified course baseline/);
+  expect(mocks.upload).not.toHaveBeenCalled();
+  await expect(f.report()).rejects.toThrow(/ENOENT/);
 });
 
 test('rejects a different deployment ID with the same version during public checks', async () => {

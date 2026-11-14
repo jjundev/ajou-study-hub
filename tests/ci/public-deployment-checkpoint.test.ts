@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import {
-  checkpointFromReceipt, comparePublicInputs, readPreviousCheckpoint,
+  checkpointFromReceipt, comparePublicInputs, courseReleaseFromCheckpoint, readPreviousCheckpoint,
 } from '../../tools/ci/public-deployment-checkpoint.js';
 
 const runId = '12345678901';
@@ -67,6 +67,31 @@ test('observes every changed course against the current verified deployment', as
   ]) expect(await comparePublicInputs({ ...current, ...update })).toEqual({ match: false, changedCourses: [] });
   expect(await comparePublicInputs({ ...current, inputHash, courseHashes: current.courseHashes }))
     .toEqual({ match: false, changedCourses: [] });
+});
+
+test('applies scoped verification only with fresh independently covered omitted courses', () => {
+  const isolatedCourses = ['logic-lab', 'life-science', 'circuits-2', 'data-structures', 'ml-basics'];
+  const courseHashes = Object.fromEntries(isolatedCourses.map(id => [id, 'a'.repeat(64)]));
+  const coverage = { outputHashes: courseHashes, isolatedCourses, fullVerifiedAt: new Date().toISOString() };
+  const checkpoint = checkpointFromReceipt({ ...input, courseHashes, coverage });
+  const scope = ['circuits-2'];
+  expect(checkpoint.schema).toBe(3);
+  expect(courseReleaseFromCheckpoint(checkpoint, scope)).toEqual({
+    courses: scope, outputHashes: courseHashes, fullVerifiedAt: coverage.fullVerifiedAt, baseline: active,
+  });
+  expect(courseReleaseFromCheckpoint(checkpointFromReceipt({ ...input, courseHashes }), scope)).toBeUndefined();
+  expect(courseReleaseFromCheckpoint(checkpointFromReceipt({ ...input, courseHashes,
+    coverage: { ...coverage, fullVerifiedAt: '2020-01-01T00:00:00.000Z' },
+  }), scope)).toBeUndefined();
+  expect(courseReleaseFromCheckpoint(checkpointFromReceipt({ ...input, courseHashes,
+    coverage: { ...coverage, fullVerifiedAt: new Date(Date.now() - 23.5 * 3600000).toISOString() },
+  }), scope)).toBeUndefined();
+  expect(courseReleaseFromCheckpoint(checkpointFromReceipt({ ...input, courseHashes,
+    coverage: { ...coverage, isolatedCourses: ['circuits-2'] },
+  }), scope)).toBeUndefined();
+  expect(courseReleaseFromCheckpoint(checkpointFromReceipt({ ...input, courseHashes,
+    coverage: { ...coverage, isolatedCourses: isolatedCourses.filter(id => id !== 'circuits-2') },
+  }), scope)?.courses).toEqual(scope);
 });
 
 let scratch: string | undefined;

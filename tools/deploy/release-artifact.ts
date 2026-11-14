@@ -11,6 +11,7 @@ import { verificationProject } from '../verification-project.js';
 import { validateReportPath, type BuildReport } from '../content/report.js';
 import { validatePublicSettings, type PublicDeploymentSettings } from './worker-target.js';
 import { courses } from '../../config/courses.js';
+import type { CourseRelease } from '../course-release.js';
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 async function validateProjectConfig(root:string):Promise<string>{
  const path=resolve(root,'wrangler.jsonc');if((await lstat(path)).isSymbolicLink())throw Error('Symlink Wrangler configuration');
@@ -22,9 +23,9 @@ async function validateProjectConfig(root:string):Promise<string>{
 /** Share identical verified, owned artifact sealing across manual and automatic authorization. */
 export async function withSealedArtifact<T>(
  project:string,
- authorize:()=>Promise<void>,
- upload:(directory:string,configPath:string,manifest:BuildReport)=>Promise<T>,
- options?:{publicTarget:PublicDeploymentSettings},
+ authorize:(baseline?:CourseRelease['baseline'])=>Promise<void>,
+ upload:(directory:string,configPath:string,manifest:BuildReport,baseline?:CourseRelease['baseline'])=>Promise<T>,
+ options?:{publicTarget:PublicDeploymentSettings;courseRelease?:CourseRelease},
 ):Promise<T>{
  const canonical=await verificationProject();
  const root=project===canonical?canonical:await verificationProject(project);
@@ -60,13 +61,15 @@ export async function withSealedArtifact<T>(
  const exceptionsText=await readFile(exceptionsPath,'utf8');
  const reportText=await readFile(reportPath,'utf8'),proofText=await readFile(proofPath,'utf8');
  const manifest=JSON.parse(reportText) as BuildReport,proof=JSON.parse(proofText);
- await assertCurrentBundle(dist,manifest,root);await assertReleaseProof(root,dist,manifest,proof);
+ const courseRelease=publicTarget?options?.courseRelease:undefined;
+ const baseline=proof.scope==='changed-course-runtime'?courseRelease?.baseline:undefined;
+ await assertCurrentBundle(dist,manifest,root);await assertReleaseProof(root,dist,manifest,proof,courseRelease);
  if(publicTarget && (manifest.sources.length!==courses.length || courses.some(course=>
   !manifest.sources.some(source=>source.courseId===course.id && !source.dirty && source.explicitUntracked.length===0))))
   throw Error('Public release requires five clean pinned course checkouts');
  await assertCurrentSources(root,proof.sourceBinding,manifest);
  if(!same(await inventory(dist),manifest.outputs))throw Error('Final bundle size/inventory mismatch');
- await authorize();
+ await authorize(baseline);
  // Owned copy, not hardlinks: a simultaneous dist rebuild cannot affect uploaded bytes.
  const owned=resolve(root,'.generated'),stage=resolve(owned,(publicTarget?'public-release-':'private-release-')+randomUUID());
  await mkdir(owned,{recursive:true});if((await lstat(owned)).isSymbolicLink()||await realpath(owned)!==owned)throw Error('Unsafe release staging root');
@@ -77,7 +80,7 @@ export async function withSealedArtifact<T>(
   if(!same(await inventory(directory),manifest.outputs))throw Error('Changed bundle during sealing');
   await writeFile(configPath,JSON.stringify(fixedConfig(settings,directory)),{flag:'wx',mode:0o600});
   // Last live read is after all staging work. Then recheck every mutable local authorization input.
-  await authorize();
+  await authorize(baseline);
   await assertSettingsUnchanged();if(await validateProjectConfig(root)!==configText)throw Error('Wrangler config changed');
   if((await lstat(exceptionsPath)).isSymbolicLink()||await readFile(exceptionsPath,'utf8')!==exceptionsText)throw Error('Exception policy changed');
   for(const [path,text] of [[reportPath,reportText],[proofPath,proofText]] as const){await validateReportPath(path,[dist],root);if(await readFile(path,'utf8')!==text)throw Error('Release proof changed');}
@@ -87,7 +90,7 @@ export async function withSealedArtifact<T>(
   for(const [path,text] of [[reportPath,reportText],[proofPath,proofText]] as const){await validateReportPath(path,[dist],root);if(await readFile(path,'utf8')!==text)throw Error('Release proof changed during source verification');}
   if(!same(await inventory(directory),manifest.outputs)||!same(JSON.parse(await readFile(configPath,'utf8')),fixedConfig(settings,directory)))throw Error('Sealed artifact changed');
   assertRuntimeFresh(manifest,proof);
-  return await upload(directory,configPath,manifest);
+  return await upload(directory,configPath,manifest,baseline);
  }finally{
   // Delete only this randomly-created direct child of the canonical owned staging root.
   if(dirname(stage)!==owned||await realpath(stage)!==stage||(await lstat(stage)).isSymbolicLink())throw Error('Unsafe release cleanup');

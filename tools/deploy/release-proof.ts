@@ -8,6 +8,7 @@ import { auditWorkbookFigures } from '../runtime-workbooks.js';
 import { representativePaths } from '../representatives.js';
 import type { Observation } from '../verify-content.js';
 import type { Issue } from '../../src/content/model.js';
+import { selectCourseRelease, type CourseRelease } from '../course-release.js';
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const fail=():never=>{throw Error('Incomplete, stale or changed runtime/build proof');};
 /** Preserved remote references are inventory information, not a runtime failure waiver. */
@@ -25,11 +26,15 @@ export function assertRuntimeFresh(manifest:BuildReport,proof:{createdAt:string}
  if(!Number.isFinite(age)||age<0||age>86400000||Date.parse(proof.createdAt)<Date.parse(manifest.createdAt)||!Number.isFinite(Date.parse(manifest.createdAt)))fail();
 }
 /** Reconcile evidence with the entire app manifest, never just its success flag. */
-export async function assertReleaseProof(root:string,directory:string,manifest:BuildReport,proof:any):Promise<void>{
+export async function assertReleaseProof(root:string,directory:string,manifest:BuildReport,proof:any,courseRelease?:CourseRelease):Promise<void>{
  const exceptions:RuntimeException[]=JSON.parse(await readFile(resolve(root,'config/content-exceptions.json'),'utf8'));
  const catalog:Catalog=JSON.parse(await readFile(resolve(directory,'catalog.json'),'utf8'));
  assertRuntimeFresh(manifest,proof);
- if(proof.version!==2||!proof.sourceBinding||proof.scope!=='actual-app-runtime'||proof.status!=='complete'||proof.passed!==true||proof.deploymentEligible!==true)fail();
+ const scoped=proof.scope==='changed-course-runtime'?selectCourseRelease(courseRelease,manifest.outputs):undefined;
+ if(proof.scope==='changed-course-runtime'){
+  if(!scoped||!same(scoped,proof.courseRelease))fail();
+ }else if(proof.scope!=='actual-app-runtime'||proof.courseRelease!==undefined)fail();
+ if(proof.version!==2||!proof.sourceBinding||proof.status!=='complete'||proof.passed!==true||proof.deploymentEligible!==true)fail();
  if(!Array.isArray(manifest.inputs)||!manifest.inputs.length||!Array.isArray(manifest.sources)||!manifest.sources.length||!Array.isArray(manifest.issues)||!same(proof.inputs,manifest.inputs)||!same(proof.sources,manifest.sources)||proof.bundleHash!==manifest.bundleHash||proof.catalogHash!==manifest.outputs.find(f=>f.path==='catalog.json')?.sha256||!same(proof.exceptions,exceptions))fail();
  if(checkBundle(manifest.outputs,bundleLimits).length)fail();
  for(const input of manifest.inputs)if(typeof input.courseId!=='string'||!input.courseId||typeof input.path!=='string'||!input.path||!/^[a-f0-9]{64}$/.test(input.sha256))fail();
@@ -43,7 +48,9 @@ export async function assertReleaseProof(root:string,directory:string,manifest:B
   const excepted=issue.code==='invalid-reference'&&matchingException(issue,exceptions);
   if(issue.severity!=='warning'||(!informational&&!excepted))fail();
  }
- if(!Array.isArray(catalog.documents)||!catalog.documents.length||new Set(catalog.documents.map(d=>d.id)).size!==catalog.documents.length||proof.documentsChecked!==catalog.documents.length||!Array.isArray(proof.documents)||proof.documents.length!==catalog.documents.length)fail();
+ if(!Array.isArray(catalog.documents)||!catalog.documents.length||new Set(catalog.documents.map(d=>d.id)).size!==catalog.documents.length)fail();
+ const scanned=new Map(catalog.documents.filter(doc=>!scoped||scoped.courses.includes(doc.courseId)).map(doc=>[doc.id,doc]));
+ if(proof.documentsChecked!==scanned.size||!Array.isArray(proof.documents)||proof.documents.length!==scanned.size)fail();
  const integrity=proof.integrityChecks;
  if(!integrity||integrity.sourceHashesUnchanged!==true||integrity.bundleBytesUnchanged!==true||integrity.sourceTrackingUnchanged!==true||integrity.inputCount!==manifest.inputs.length||integrity.outputCount!==manifest.outputs.length)fail();
  const seen=new Set<string>();
@@ -53,7 +60,7 @@ export async function assertReleaseProof(root:string,directory:string,manifest:B
  for(const group of catalog.groups)for(const pdf of [...(group.reviewPdfs??[]),...(group.answerPdfs??[])])
   if(!outputPaths.has(`content/${group.courseId}/${pdf.normalize('NFC')}`))fail();
  for(const item of proof.documents){
-  const doc=catalog.documents.find(d=>d.id===item.documentId);
+  const doc=scanned.get(item.documentId);
   if(!doc||seen.has(item.documentId)||typeof item.title!=='string'||!Number.isSafeInteger(item.images)||item.images<0||!Array.isArray(item.pendingRequests)||item.pendingRequests.length||!Array.isArray(item.responses))fail();
   seen.add(item.documentId);
   if(!item.responses.some((r:any)=>{try{return r.status===200&&decodeURIComponent(new URL(r.url).pathname)===decodeURIComponent(doc!.url);}catch{return false;}}))fail();

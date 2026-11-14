@@ -20,10 +20,11 @@ import { auditWorkbookFigures } from "./runtime-workbooks.js";
 import { verifyRepresentatives } from "./representatives.js";
 import type { Catalog } from "../src/content/model.js";
 import { courses } from "../config/courses.js";
+import { selectCourseRelease, type CourseRelease } from "./course-release.js";
 
 export async function verifyActual(
   sourcesPath: string,
-  options: { reportPath?: string; testProjectRoot?: string; observeCourses?: readonly string[]; quiet?: boolean } = {},
+  options: { reportPath?: string; testProjectRoot?: string; observeCourses?: readonly string[]; courseRelease?: CourseRelease; quiet?: boolean } = {},
 ) {
   const startedAt = Date.now();
   const started = performance.now();
@@ -31,7 +32,7 @@ export async function verifyActual(
   const projectRoot = await verificationProject(options.testProjectRoot);
   const canonicalProof = resolve(projectRoot, ".reports/verification.json");
   const observed = options.observeCourses;
-  if (observed && (options.reportPath !== undefined || !observed.length ||
+  if (observed && (options.courseRelease || options.reportPath !== undefined || !observed.length ||
       observed.length >= courses.length || new Set(observed).size !== observed.length ||
       observed.some(id => !courses.some(course => course.id === id))))
     throw Error("Invalid course verification observation scope");
@@ -65,6 +66,7 @@ export async function verifyActual(
   const manifest = JSON.parse(
     await readFile(resolve(projectRoot, ".reports/app-build.json"), "utf8"),
   ) as BuildReport;
+  const courseRelease = selectCourseRelease(options.courseRelease, manifest.outputs);
   log(`Checking ${manifest.outputs.length} app bundle outputs`);
   await assertCurrentBundle(
     resolve(projectRoot, "dist"),
@@ -109,8 +111,9 @@ export async function verifyActual(
     snapshot.readFile,
     manifest.outputs.map((f) => f.path),
   );
-  const browserDocuments = observed
-    ? catalog.documents.filter(doc => observed.includes(doc.courseId))
+  const scopedCourses = observed ?? courseRelease?.courses;
+  const browserDocuments = scopedCourses
+    ? catalog.documents.filter(doc => scopedCourses.includes(doc.courseId))
     : catalog.documents;
   const server = await serveManifest(resolve(projectRoot, "dist"), manifest);
   const observations: Observation[] = [];
@@ -311,8 +314,9 @@ export async function verifyActual(
     const result = {
       version: 2,
       sourceBinding,
-      scope: observed ? "observed-course-runtime" : "actual-app-runtime",
+      scope: observed ? "observed-course-runtime" : courseRelease ? "changed-course-runtime" : "actual-app-runtime",
       ...(observed ? { observedCourses: observed } : {}),
+      ...(courseRelease ? { courseRelease } : {}),
       catalogHash: manifest.outputs.find((f) => f.path === "catalog.json")!
         .sha256,
       status: "complete",

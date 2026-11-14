@@ -9,6 +9,7 @@ import { verificationProject } from '../verification-project.js';
 import { withSealedArtifact } from './release-artifact.js';
 import { runWranglerUpload } from './wrangler-upload.js';
 import { readActiveDeployment, readWorkerTarget, validatePublicSettings, workerVersionId, type ActiveDeployment } from './worker-target.js';
+import { parseCourseRelease, type CourseRelease } from '../course-release.js';
 
 type ProbeOptions = { fetch?: typeof fetch; timeoutMs?: number };
 type Output = BuildReport['outputs'][number];
@@ -182,10 +183,18 @@ type ReleaseOptions = {
   testProjectRoot?: string;
   activationDelays?: number[];
   propagationDelays?: number[];
+  courseRelease?: CourseRelease;
 };
 
 const sameDeployment = (left: ActiveDeployment, right: ActiveDeployment) =>
   left.deploymentId === right.deploymentId && left.versionId === right.versionId;
+
+class CourseBaselineChanged extends Error {}
+
+function assertCourseBaseline(baseline: ActiveDeployment | undefined, active: ActiveDeployment) {
+  if (baseline && !sameDeployment(baseline, active))
+    throw new CourseBaselineChanged('Active Worker no longer matches the previously verified course baseline');
+}
 
 /** Publish exactly once. Only active deployment and anonymous HTTP reads can retry. */
 export async function releasePublic(options: ReleaseOptions = {}) {
@@ -208,16 +217,18 @@ export async function releasePublic(options: ReleaseOptions = {}) {
   const lock = await open(lockPath, 'wx', 0o600);
   try {
     let previous: ActiveDeployment | undefined;
-    const authorize = async () => {
+    const authorize = async (baseline?: ActiveDeployment) => {
       await readWorkerTarget(target, api);
       const current = await readActiveDeployment(target, api);
+      assertCourseBaseline(baseline, current);
       if (previous && !sameDeployment(previous, current))
         throw Error('Active Worker deployment changed during public release preparation');
       previous = current;
       await verifyExistingPublicSite(target.productionUrl);
     };
-    return await withSealedArtifact(root, authorize, async (directory, configPath, manifest) => {
+    return await withSealedArtifact(root, authorize, async (directory, configPath, manifest, baseline) => {
       if (!previous) throw Error('Missing active Worker deployment before upload');
+      if (baseline) assertCourseBaseline(baseline, await readActiveDeployment(target, api));
       const base = {
         url: target.productionUrl, workerId: target.workerId,
         previousVersionId: previous.versionId, bundleHash: manifest.bundleHash,
@@ -271,7 +282,7 @@ export async function releasePublic(options: ReleaseOptions = {}) {
       };
       await record({ ...result, status: 'published-public-verified' });
       return result;
-    }, { publicTarget: target });
+    }, { publicTarget: target, courseRelease: options.courseRelease });
   } finally {
     await lock.close();
     await validateReportPath(lockPath, [dist], root);
@@ -281,10 +292,21 @@ export async function releasePublic(options: ReleaseOptions = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   void (async () => {
-    if (process.argv.length !== 2) throw Error('Public release accepts no overrides');
-    const result = await releasePublic();
+    const automatic = process.argv.length === 3 && process.argv[2] === '--automatic' &&
+      process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_REPOSITORY === 'jjundev/ajou-study-hub' &&
+      process.env.GITHUB_REF === 'refs/heads/main' &&
+      process.env.GITHUB_WORKFLOW_REF === 'jjundev/ajou-study-hub/.github/workflows/study-hub-update.yml@refs/heads/main' &&
+      /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA ?? '') &&
+      process.env.GITHUB_WORKFLOW_SHA === process.env.GITHUB_SHA;
+    if (process.argv.length !== 2 && !automatic) throw Error('Public release accepts no manual overrides');
+    const result = await releasePublic({ courseRelease: automatic ? parseCourseRelease(process.env.COURSE_RELEASE) : undefined });
     console.log(`Public release verified at ${result.url} (${result.versionId}, ${result.checked} responses)`);
-  })().catch(() => {
+  })().catch(error => {
+    if (error instanceof CourseBaselineChanged) {
+      console.error('CI_COURSE_BASELINE_CHANGED_BEFORE_UPLOAD');
+      process.exitCode = 75;
+      return;
+    }
     console.error('Public release failed; inspect .reports/public-release.json and the active Worker before retrying');
     process.exitCode = 1;
   });
