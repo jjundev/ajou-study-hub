@@ -193,6 +193,9 @@ test('secrets and receipt handling remain bound to their steps',async()=>{
  expect(upload.if).toContain("steps.record-public-checkpoint.outcome == 'success'");
  expect(upload.with).toEqual({name:'public-checkpoint-${{ github.run_attempt }}',path:'app/.reports/public-checkpoint.json',
   'retention-days':7,'if-no-files-found':'error','include-hidden-files':false});
+ const observe=steps.find((s:any)=>s.id==='observe-course-verification');
+ expect(steps.indexOf(observe)).toBeGreaterThan(steps.indexOf(upload));
+ expect(observe).toMatchObject({'continue-on-error':true,'timeout-minutes':12});
 });
 
 test('only eligible course updates may skip expensive steps', async () => {
@@ -210,6 +213,12 @@ test('only eligible course updates may skip expensive steps', async () => {
   { name:'verify only', mode:'verify', published:false, compare:false, skip:false },
   { name:'updates disabled', enabled:'disabled', published:false, compare:false, skip:false },
   { name:'observe mode', policy:'observe', compare:true, skip:false },
+  { name:'course observe with changed inputs', coursePolicy:'observe', match:'false', changed:'life-science', observe:true, compare:true, skip:false },
+  { name:'course observe works independently of unchanged skip', coursePolicy:'observe', policy:'', match:'false', changed:'logic-lab,ml-basics', observe:true, compare:true, skip:false },
+  { name:'course observe follows an unchanged skip', coursePolicy:'observe', compare:true, skip:true },
+  { name:'course observe without a comparable baseline', coursePolicy:'observe', match:'false', compare:true, skip:false },
+  { name:'course observe cannot run after the comparison fails', coursePolicy:'observe', match:'false', changed:'life-science', comparisonFailed:true, compare:true, skip:false },
+  { name:'course observe cannot run if the full path fails', coursePolicy:'observe', match:'false', changed:'life-science', publishFailed:true, compare:true, skip:false },
   { name:'default mode', policy:'', compare:false, skip:false },
   { name:'input mismatch', match:'false', compare:true, skip:false },
   { name:'fingerprint failure', fingerprintFailed:true, compare:false, skip:false },
@@ -219,7 +228,8 @@ test('only eligible course updates may skip expensive steps', async () => {
  ];
  for (const row of scenarios) {
   let success = row.success ?? true;
-  const vars = { STUDY_HUB_AUTOMATIC_UPDATES:row.enabled ?? 'enabled', STUDY_HUB_UNCHANGED_DEPLOYMENTS:row.policy ?? 'skip' };
+  const vars = { STUDY_HUB_AUTOMATIC_UPDATES:row.enabled ?? 'enabled', STUDY_HUB_UNCHANGED_DEPLOYMENTS:row.policy ?? 'skip',
+   STUDY_HUB_COURSE_VERIFICATION:row.coursePolicy ?? '' };
   const inputs = { mode:row.mode ?? 'default', source_repository:row.source ?? course };
   const github = { event_name:row.event ?? 'workflow_dispatch' };
   const known: Record<string,{outputs:Record<string,string>;outcome?:string}> = {};
@@ -242,8 +252,13 @@ test('only eligible course updates may skip expensive steps', async () => {
    if (run && step.id==='compare-public-inputs') {
     known[step.id]!.outcome=row.comparisonFailed ? 'failure' : 'success';
     known[step.id]!.outputs.match=row.match ?? 'true';
+    known[step.id]!.outputs.changed_courses=row.changed ?? '';
    }
    if (run && step.id==='skip-public-deployment') known[step.id]!.outputs.skip='true';
+   if (run && step.id==='publish' && row.publishFailed) {
+    known[step.id]!.outcome='failure';
+    success=false;
+   }
    if (run && step.id==='boundary' && row.boundaryFailed) {
     known[step.id]!.outcome='failure';
     success=false;
@@ -251,6 +266,7 @@ test('only eligible course updates may skip expensive steps', async () => {
   }
   expect(outcomes.get('compare-public-inputs'),row.name).toBe(row.compare);
   expect(outcomes.get('skip-public-deployment'),row.name).toBe(row.skip);
+  expect(outcomes.get('observe-course-verification') ?? false,row.name).toBe(row.observe ?? false);
   expect(outcomes.get('boundary'),row.name).toBe(row.success ?? true);
   expect(outcomes.get('Report the verified unchanged deployment'),row.name).toBe(row.skip && !row.boundaryFailed);
   for (const name of names) {

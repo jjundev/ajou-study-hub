@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, expect, test } from 'vitest';
 import { courses } from '../../config/courses.js';
-import { fingerprintPublicInputs } from '../../tools/ci/public-input-fingerprint.js';
+import { fingerprintPublicInputDetails } from '../../tools/ci/public-input-fingerprint.js';
 import type { SourceSnapshot } from '../../tools/ci/sources.js';
 
 const exec = promisify(execFile);
@@ -41,7 +41,7 @@ async function fixture() {
     return { courseId: course.id, repository: course.repo, root, sha: await commit(root, 'source') };
   }));
   const course = snapshot.revisions[0]!;
-  return { project, snapshot, course, call: () => fingerprintPublicInputs(project, snapshot) };
+  return { project, snapshot, course, call: async () => (await fingerprintPublicInputDetails(project, snapshot)).inputHash };
 }
 
 test('fingerprints the material actually checked out', async () => {
@@ -82,6 +82,17 @@ test('includes checked-out bytes after Git attribute conversion', async () => {
   expect(await git(course.root, 'rev-parse', 'HEAD:' + path)).toBe(blob);
   expect(await git(course.root, 'status', '--porcelain')).toBe('');
   expect(await call()).not.toBe(before);
+}, fixtureTimeout);
+
+test('only the edited course digest changes when a published asset is removed', async () => {
+  const { project, snapshot, course } = await fixture();
+  const before = await fingerprintPublicInputDetails(project, snapshot);
+  await rm(join(course.root, '복습노트', 'notes.pdf'));
+  course.sha = await commit(course.root, 'delete PDF');
+  const after = await fingerprintPublicInputDetails(project, snapshot);
+  expect(after.inputHash).not.toBe(before.inputHash);
+  expect(Object.keys(after.courseHashes).filter(id => after.courseHashes[id] !== before.courseHashes[id]))
+    .toEqual(['logic-lab']);
 }, fixtureTimeout);
 
 test('rejects a moved HEAD or an unsafe selected file', async () => {

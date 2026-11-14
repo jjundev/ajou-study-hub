@@ -14,6 +14,14 @@ import { authorizedRoots, selected } from './sparse-source.js';
 const exec = promisify(execFile);
 const shaPattern = /^[a-f0-9]{40}$/;
 const invalid = () => new Error('CI_PUBLIC_INPUT_UNAVAILABLE');
+export type PublicInputFingerprint = { inputHash: string; courseHashes: Record<string, string> };
+
+export function isCourseHashes(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const hashes = value as Record<string, unknown>;
+  return Object.keys(hashes).length === courses.length && courses.every(({ id }) =>
+    Object.hasOwn(hashes, id) && typeof hashes[id] === 'string' && /^[a-f0-9]{64}$/.test(hashes[id]));
+}
 
 async function git(root: string, ...args: string[]): Promise<string> {
   const { stdout } = await exec('git', args, {
@@ -44,7 +52,7 @@ async function fileHash(root: string, path: string, metrics: SourceMetrics): Pro
 }
 
 /** Requires the source limits and binding checks to have run on this checkout. */
-export async function fingerprintPublicInputs(project: string, snapshot: SourceSnapshot): Promise<string> {
+export async function fingerprintPublicInputDetails(project: string, snapshot: SourceSnapshot): Promise<PublicInputFingerprint> {
   const app = resolve(project);
   const sourceDir = resolve(app, '../sources');
   if (snapshot.version !== 1 || !Array.isArray(snapshot.revisions) ||
@@ -53,6 +61,7 @@ export async function fingerprintPublicInputs(project: string, snapshot: SourceS
   await assertHead(app, snapshot.appSha);
   const metrics: SourceMetrics = { files: 0, totalBytes: 0, maxFileBytes: 0, freeBytes: 0 };
   const inputs = [];
+  const courseHashes: PublicInputFingerprint['courseHashes'] = {};
   for (const course of courses) {
     const revisions = snapshot.revisions.filter(revision => revision?.courseId === course.id);
     const revision = revisions[0];
@@ -82,10 +91,12 @@ export async function fingerprintPublicInputs(project: string, snapshot: SourceS
       paths.set(path, [path, mode, await fileHash(root, path, metrics)]);
     }
     await assertHead(root, revision.sha);
-    inputs.push([course.id, course.repo, [...paths.keys()].sort().map(path => paths.get(path))]);
+    const input = [course.id, course.repo, [...paths.keys()].sort().map(path => paths.get(path))];
+    inputs.push(input);
+    courseHashes[course.id] = createHash('sha256').update(JSON.stringify(input)).digest('hex');
   }
   await assertHead(app, snapshot.appSha);
-  return createHash('sha256').update(JSON.stringify([1, snapshot.appSha, inputs])).digest('hex');
+  return { inputHash: createHash('sha256').update(JSON.stringify([1, snapshot.appSha, inputs])).digest('hex'), courseHashes };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -95,7 +106,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const stat = await lstat(path);
     if (!stat.isFile() || stat.size > 16384) throw invalid();
     const snapshot = JSON.parse(await readFile(path, 'utf8')) as SourceSnapshot;
-    process.stdout.write(await fingerprintPublicInputs(process.cwd(), snapshot) + '\n');
+    process.stdout.write(JSON.stringify(await fingerprintPublicInputDetails(process.cwd(), snapshot)) + '\n');
   })().catch(() => {
     process.stderr.write('CI_PUBLIC_INPUT_UNAVAILABLE\n');
     process.exitCode = 1;

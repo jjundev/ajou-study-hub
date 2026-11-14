@@ -3,6 +3,8 @@ import { appendFile, lstat, mkdtemp, open, readdir, realpath, rm, writeFile } fr
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { courses } from '../../config/courses.js';
+import { isCourseHashes, type PublicInputFingerprint } from './public-input-fingerprint.js';
 import { digest, isRecord } from '../deploy/access-policy.js';
 import {
   readActiveDeployment, readWorkerTarget, validatePublicSettings, workerVersionId,
@@ -10,7 +12,6 @@ import {
 } from '../deploy/worker-target.js';
 
 export type PublicCheckpoint = {
-  schema: 1;
   runId: string;
   attempt: number;
   appSha: string;
@@ -19,7 +20,7 @@ export type PublicCheckpoint = {
   deploymentId: string;
   versionId: string;
   bundleHash: string;
-};
+} & ({ schema: 1; courseHashes?: never } | { schema: 2; courseHashes: PublicInputFingerprint['courseHashes'] });
 type Lookup = {
   gh: (args: string[], cwd?: string) => Promise<string>;
   currentRunId: string;
@@ -40,45 +41,60 @@ const runIdentifier = (value: unknown): value is string => valid(value, /^[1-9]\
 const invalid = () => new Error('CI_PUBLIC_CHECKPOINT_UNAVAILABLE');
 
 function checkedCheckpoint(value: unknown): PublicCheckpoint {
-  if (!isRecord(value) ||
-      Object.keys(value).sort().join(',') !== 'appSha,attempt,bundleHash,deploymentId,inputHash,runId,schema,targetHash,versionId' ||
-      value.schema !== 1 || !runIdentifier(value.runId) || !positive(value.attempt) ||
+  if (!isRecord(value) || (value.schema !== 1 && value.schema !== 2) ||
+      !runIdentifier(value.runId) || !positive(value.attempt) ||
       !valid(value.appSha, sha) || !valid(value.inputHash, sha256) ||
       !valid(value.targetHash, sha256) || !valid(value.bundleHash, sha256) ||
       !valid(value.deploymentId, workerVersionId) || !valid(value.versionId, workerVersionId)) throw invalid();
+  const fields = ['appSha', 'attempt', 'bundleHash', 'deploymentId', 'inputHash', 'runId', 'schema', 'targetHash', 'versionId'];
+  if (value.schema === 2) {
+    if (!isCourseHashes(value.courseHashes)) throw invalid();
+    fields.push('courseHashes');
+  }
+  if (Object.keys(value).length !== fields.length || !fields.every(field => Object.hasOwn(value, field))) throw invalid();
   return value as PublicCheckpoint;
 }
 
 export function checkpointFromReceipt(input: {
   runId: string; attempt: number; appSha: string; inputHash: string;
+  courseHashes?: PublicInputFingerprint['courseHashes'];
   target: PublicDeploymentSettings; receipt: unknown;
 }): PublicCheckpoint {
-  const { runId, attempt, appSha, inputHash, target, receipt } = input;
+  const { runId, attempt, appSha, inputHash, courseHashes, target, receipt } = input;
   validatePublicSettings(target);
   if (!isRecord(receipt) || receipt.status !== 'published-public-verified' ||
       receipt.versionId !== receipt.currentVersionId ||
       receipt.url !== target.productionUrl || receipt.workerId !== target.workerId ||
       !positive(receipt.checked) || receipt.checked < 3 || receipt.checked > 20000) throw invalid();
   return checkedCheckpoint({
-    schema: 1, runId, attempt, appSha, inputHash, targetHash: digest(target),
+    ...(courseHashes ? { schema: 2, courseHashes } : { schema: 1 }),
+    runId, attempt, appSha, inputHash, targetHash: digest(target),
     deploymentId: receipt.deploymentId, versionId: receipt.versionId, bundleHash: receipt.bundleHash,
   });
 }
 
-export async function comparePublicCheckpoint(input: {
+export async function comparePublicInputs(input: {
   checkpoint: PublicCheckpoint | null; appSha: string; inputHash: string;
+  courseHashes?: PublicInputFingerprint['courseHashes'];
   target: PublicDeploymentSettings; readActive: () => Promise<ActiveDeployment>;
-}): Promise<'match' | 'build'> {
+}): Promise<{ match: boolean; changedCourses: string[] }> {
+  const unavailable = { match: false, changedCourses: [] };
   try {
-    const { appSha, inputHash, target, readActive } = input;
+    const { appSha, inputHash, courseHashes, target, readActive } = input;
     validatePublicSettings(target);
     const checkpoint = checkedCheckpoint(input.checkpoint);
-    if (checkpoint.appSha !== appSha || checkpoint.inputHash !== inputHash ||
-        checkpoint.targetHash !== digest(target)) return 'build';
+    if (checkpoint.appSha !== appSha || checkpoint.targetHash !== digest(target)) return unavailable;
+    const match = checkpoint.inputHash === inputHash;
+    const previousHashes = checkpoint.courseHashes;
+    const changedCourses = previousHashes && isCourseHashes(courseHashes)
+      ? courses.map(course => course.id).filter(id => previousHashes[id] !== courseHashes[id]) : [];
+    if (match && changedCourses.length) return unavailable;
+    if (!match && (!changedCourses.length || changedCourses.length === courses.length)) return unavailable;
     const active = await readActive();
-    return active.deploymentId === checkpoint.deploymentId && active.versionId === checkpoint.versionId ? 'match' : 'build';
+    return active.deploymentId === checkpoint.deploymentId && active.versionId === checkpoint.versionId
+      ? { match, changedCourses } : unavailable;
   } catch {
-    return 'build';
+    return unavailable;
   }
 }
 
@@ -185,23 +201,25 @@ function settings(): PublicDeploymentSettings {
   return target;
 }
 
-async function inputFingerprint(scratch: string): Promise<string> {
-  const text = await readSmallFile(resolve(scratch, 'study-hub-public-input.sha256'), 65);
-  if (!/^[a-f0-9]{64}\n$/.test(text)) throw invalid();
-  return text.slice(0, -1);
+async function inputFingerprint(scratch: string): Promise<PublicInputFingerprint> {
+  const value: unknown = JSON.parse(await readSmallFile(resolve(scratch, 'study-hub-public-input.json')));
+  if (!isRecord(value) || Object.keys(value).sort().join(',') !== 'courseHashes,inputHash' ||
+      !valid(value.inputHash, sha256) || !isCourseHashes(value.courseHashes)) throw invalid();
+  return { inputHash: value.inputHash, courseHashes: value.courseHashes };
 }
 
 async function compare(): Promise<void> {
   const output = process.env.GITHUB_OUTPUT;
   if (!output) throw invalid();
   let match: PublicCheckpoint | null = null;
+  let changedCourses: string[] = [];
   try {
     const { GITHUB_RUN_ID: currentRunId, GITHUB_SHA: appSha, RUNNER_TEMP: scratch,
       CLOUDFLARE_READ_TOKEN: token, GH_TOKEN, ...cliEnv } = process.env;
     if (!runIdentifier(currentRunId) || !valid(appSha, sha) || !scratch || !token || !GH_TOKEN ||
         process.env.GITHUB_RUN_ATTEMPT !== '1') throw invalid();
     const target = settings();
-    const inputHash = await inputFingerprint(scratch);
+    const { inputHash, courseHashes } = await inputFingerprint(scratch);
     const budget = AbortSignal.timeout(30000);
     const checkpoint = await readPreviousCheckpoint({
       currentRunId, scratch,
@@ -210,8 +228,9 @@ async function compare(): Promise<void> {
         env: { ...cliEnv, GH_TOKEN, GH_PROMPT_DISABLED: '1' },
       })).stdout,
     });
-    const decision = await comparePublicCheckpoint({
+    const decision = await comparePublicInputs({
       checkpoint, appSha, inputHash, target,
+      courseHashes: process.env.COURSE_VERIFICATION === 'observe' ? courseHashes : undefined,
       readActive: async () => {
         const timeout = AbortSignal.timeout(30000);
         const api = { token, fetch: ((url, options) => fetch(url, {
@@ -221,23 +240,25 @@ async function compare(): Promise<void> {
         return readActiveDeployment(target, api);
       },
     });
-    if (decision === 'match') match = checkpoint;
+    if (decision.match) match = checkpoint;
+    changedCourses = decision.changedCourses;
   } catch {
     // Comparison is optional. Provider output and local paths stay out of logs.
   }
   if (!match) console.log('CI_PUBLIC_CHECKPOINT_NO_MATCH');
   await appendFile(output, match ? 'bundle_hash=' + match.bundleHash + '\nmatch=true\n' : 'match=false\n');
+  if (changedCourses.length) await appendFile(output, 'changed_courses=' + changedCourses.join(',') + '\n');
 }
 
 async function record(): Promise<void> {
   const { RUNNER_TEMP: scratch, GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: attempt,
     GITHUB_SHA: appSha, EXPECTED_PUBLIC_INPUT_HASH: expected } = process.env;
   if (!scratch || !runIdentifier(runId) || !runIdentifier(attempt) || !valid(appSha, sha)) throw invalid();
-  const inputHash = await inputFingerprint(scratch);
+  const { inputHash, courseHashes } = await inputFingerprint(scratch);
   if (inputHash !== expected) throw invalid();
   const reports = resolve('.reports');
   const receipt = JSON.parse(await readSmallFile(resolve(reports, 'public-release.json')));
-  const checkpoint = checkpointFromReceipt({ runId, attempt: Number(attempt), appSha, inputHash, target: settings(), receipt });
+  const checkpoint = checkpointFromReceipt({ runId, attempt: Number(attempt), appSha, inputHash, courseHashes, target: settings(), receipt });
   await writeFile(resolve(reports, filename), JSON.stringify(checkpoint) + '\n', { flag: 'wx', mode: 0o600 });
 }
 

@@ -19,37 +19,44 @@ import {
 import { auditWorkbookFigures } from "./runtime-workbooks.js";
 import { verifyRepresentatives } from "./representatives.js";
 import type { Catalog } from "../src/content/model.js";
+import { courses } from "../config/courses.js";
+
 export async function verifyActual(
   sourcesPath: string,
-  options: { reportPath?: string; testProjectRoot?: string } = {},
+  options: { reportPath?: string; testProjectRoot?: string; observeCourses?: readonly string[]; quiet?: boolean } = {},
 ) {
   const startedAt = Date.now();
+  const started = performance.now();
+  const log = options.quiet ? () => {} : console.log;
   const projectRoot = await verificationProject(options.testProjectRoot);
   const canonicalProof = resolve(projectRoot, ".reports/verification.json");
+  const observed = options.observeCourses;
+  if (observed && (options.reportPath !== undefined || !observed.length ||
+      observed.length >= courses.length || new Set(observed).size !== observed.length ||
+      observed.some(id => !courses.some(course => course.id === id))))
+    throw Error("Invalid course verification observation scope");
+  const initialReport = observed
+    ? resolve(projectRoot, ".reports/course-verification-observe.json") : canonicalProof;
   const running = {
     createdAt: new Date().toISOString(),
     passed: false,
     deploymentEligible: false,
     status: "running",
   };
-  await writeReport(
-    running,
-    canonicalProof,
-    [resolve(projectRoot, "dist")],
-    projectRoot,
-  );
+  if (!observed)
+    await writeReport(running, canonicalProof, [resolve(projectRoot, "dist")], projectRoot);
   const sourceIdentity = await readSourceSettings(projectRoot, sourcesPath);
   const settings = sourceIdentity.settings;
   const reportPath = resolve(
     projectRoot,
-    options.reportPath ?? ".reports/verification.json",
+    options.reportPath ?? initialReport,
   );
   const exclusions = [
     resolve(projectRoot, "dist"),
     ...Object.values(settings.roots),
   ];
   await validateReportPath(reportPath, exclusions, projectRoot);
-  if (reportPath !== canonicalProof)
+  if (observed || reportPath !== canonicalProof)
     await writeReport(running, reportPath, exclusions, projectRoot);
   // Fail closed even when the source checkout cannot be inspected.
   const { snapshot, binding: sourceBinding } = await inspectBoundSources(projectRoot, sourcesPath);
@@ -58,7 +65,7 @@ export async function verifyActual(
   const manifest = JSON.parse(
     await readFile(resolve(projectRoot, ".reports/app-build.json"), "utf8"),
   ) as BuildReport;
-  console.log(`Checking ${manifest.outputs.length} app bundle outputs`);
+  log(`Checking ${manifest.outputs.length} app bundle outputs`);
   await assertCurrentBundle(
     resolve(projectRoot, "dist"),
     manifest,
@@ -70,11 +77,11 @@ export async function verifyActual(
     );
   // Verify manifest inputs against current tracked/allowed bytes, including intentionally dirty files.
   let inputCount = 0;
-  console.log(`Checking ${manifest.inputs.length} current source inputs`);
+  log(`Checking ${manifest.inputs.length} current source inputs`);
   for (const input of manifest.inputs) {
     const bytes = await snapshot.readFile(input.courseId, input.path);
     if (++inputCount % 1000 === 0)
-      console.log(`Source hashes ${inputCount}/${manifest.inputs.length}`);
+      log(`Source hashes ${inputCount}/${manifest.inputs.length}`);
     if (createHash("sha256").update(bytes).digest("hex") !== input.sha256)
       throw Error("Changed source input: " + input.courseId + "/" + input.path);
   }
@@ -100,18 +107,22 @@ export async function verifyActual(
     snapshot.readFile,
     manifest.outputs.map((f) => f.path),
   );
+  const browserDocuments = observed
+    ? catalog.documents.filter(doc => observed.includes(doc.courseId))
+    : catalog.documents;
   const server = await serveManifest(resolve(projectRoot, "dist"), manifest);
   const observations: Observation[] = [];
   const documents: LoadEvidence[] = [];
   let checked = 0;
   try {
+    const documentScanStartedAt = performance.now();
     const browser = await chromium.launch();
     let next = 0;
     try {
       await Promise.all(
         Array.from({ length: 3 }, async () => {
-          while (next < catalog.documents.length) {
-            const doc = catalog.documents[next++]!;
+          while (next < browserDocuments.length) {
+            const doc = browserDocuments[next++]!;
             const page = await browser.newPage();
             try {
               const evidence: LoadEvidence = {
@@ -132,8 +143,8 @@ export async function verifyActual(
               await page.close();
               checked++;
               if (checked % 10 === 0)
-                console.log(
-                  `Actual Chromium ${checked}/${catalog.documents.length}`,
+                log(
+                  `Actual Chromium ${checked}/${browserDocuments.length}`,
                 );
             }
           }
@@ -142,6 +153,7 @@ export async function verifyActual(
     } finally {
       await browser.close();
     }
+    const documentScanMs = Math.round(performance.now() - documentScanStartedAt);
     // Only failures trigger a bounded original comparison. The original server probes content targets;
     // original bytes must pass the same tracked-file + allowed-root + realpath snapshot reader.
     const exceptions = JSON.parse(
@@ -262,6 +274,7 @@ export async function verifyActual(
     const representatives = await verifyRepresentatives(
       server.baseUrl,
       catalog,
+      log,
     );
     observations.push(...representatives.observations);
     await assertCurrentBundle(
@@ -296,13 +309,15 @@ export async function verifyActual(
     const result = {
       version: 2,
       sourceBinding,
-      scope: "actual-app-runtime",
+      scope: observed ? "observed-course-runtime" : "actual-app-runtime",
+      ...(observed ? { observedCourses: observed } : {}),
       catalogHash: manifest.outputs.find((f) => f.path === "catalog.json")!
         .sha256,
       status: "complete",
       createdAt: new Date().toISOString(),
       startedAt: new Date(startedAt).toISOString(),
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.round(performance.now() - started),
+      documentScanMs,
       passed,
       documentsChecked: checked,
       issues: uniqueIssues,
@@ -318,14 +333,14 @@ export async function verifyActual(
         inputCount: manifest.inputs.length,
         outputCount: manifest.outputs.length,
       },
-      deploymentEligible: passed && !options.testProjectRoot,
+      deploymentEligible: passed && !observed && !options.testProjectRoot,
       representatives,
       dynamicAssets,
       exceptions,
       fontFallbackChecks,
     };
     await writeReport(result, reportPath, exclusions, projectRoot);
-    console.log(
+    log(
       JSON.stringify({
         checked,
         issues: uniqueIssues.length,

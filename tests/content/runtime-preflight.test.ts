@@ -12,6 +12,43 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { courses } from "../../config/courses.js";
 import { verifyActual } from "../../tools/verify-actual.js";
+
+it("leaves canonical full proof untouched when a scoped observation cannot start", async () => {
+  const root = resolve(".generated/verification-tests", randomUUID());
+  await mkdir(join(root, ".reports"), { recursive: true });
+  const proof = join(root, ".reports/verification.json");
+  const canonical = '{"deploymentEligible":true}';
+  try {
+    await writeFile(proof, canonical);
+    await expect(verifyActual("missing.json", {
+      testProjectRoot: root,
+      observeCourses: ["life-science"],
+    })).rejects.toThrow();
+    expect(await readFile(proof, "utf8")).toBe(canonical);
+    await expect(readFile(join(root, ".reports/course-verification-observe.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+it("does not overwrite a scoped report path that overlaps a configured source", async () => {
+  const root = resolve(".generated/verification-tests", randomUUID());
+  const source = join(root, ".reports");
+  const target = join(source, "course-verification-observe.json");
+  await mkdir(source, { recursive: true });
+  try {
+    await writeFile(target, "original sentinel");
+    const settings = join(root, "sources.json");
+    await writeFile(settings, JSON.stringify({
+      roots: Object.fromEntries(courses.map(course => [course.id, source])), explicitUntracked: {},
+    }));
+    await expect(verifyActual(settings, { testProjectRoot: root, observeCourses: ["life-science"] }))
+      .rejects.toThrow("overlaps source");
+    expect(await readFile(target, "utf8")).toBe("original sentinel");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 for (const mode of [
   "missing-file",
   "malformed-json",

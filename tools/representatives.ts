@@ -122,7 +122,7 @@ export type Scenario = {
   passed: boolean;
   error?: string;
 };
-export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
+export async function verifyRepresentatives(baseUrl: string, catalog: Catalog, log = console.log) {
   const scenarios: Scenario[] = [];
   const observations: Observation[] = [];
   for (const [browserName, engine] of Object.entries({
@@ -441,7 +441,7 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                   if (available) observations.splice(observations.indexOf(observation), 1);
                 }
               }
-              console.log(
+              log(
                 `Representative ${browserName} ${width} ${courseId}: ${scenario.passed ? "PASS" : "FAIL " + scenario.error}`,
               );
             }

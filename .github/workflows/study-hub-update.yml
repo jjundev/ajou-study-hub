@@ -187,17 +187,20 @@ jobs:
         id: fingerprint-public-inputs
         if: >-
           ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
-              (vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'observe' || vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'skip') }}
+              (vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'observe' || vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'skip' ||
+               vars.STUDY_HUB_COURSE_VERIFICATION == 'observe') }}
         continue-on-error: true
         env:
-          AUTOMATIC_UPDATES: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES }}
           UNCHANGED_DEPLOYMENTS: ${{ vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS }}
         run: |
-          if [[ "$AUTOMATIC_UPDATES" != enabled || ( "$UNCHANGED_DEPLOYMENTS" != observe && "$UNCHANGED_DEPLOYMENTS" != skip ) ]]; then exit 0; fi
-          hash="$(node --import tsx tools/ci/public-input-fingerprint.ts)"
+          fingerprint="$RUNNER_TEMP/study-hub-public-input.json"
+          (umask 077; set -o noclobber; node --import tsx tools/ci/public-input-fingerprint.ts > "$fingerprint")
+          hash="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).inputHash' "$fingerprint")"
           if [[ ! "$hash" =~ ^[0-9a-f]{64}$ ]]; then echo CI_PUBLIC_INPUT_UNAVAILABLE; exit 1; fi
-          (umask 077; set -o noclobber; printf '%s\n' "$hash" > "$RUNNER_TEMP/study-hub-public-input.sha256")
-          printf 'input_hash=%s\npolicy=%s\n' "$hash" "$UNCHANGED_DEPLOYMENTS" >> "$GITHUB_OUTPUT"
+          printf 'input_hash=%s\n' "$hash" >> "$GITHUB_OUTPUT"
+          if [[ "$UNCHANGED_DEPLOYMENTS" == observe || "$UNCHANGED_DEPLOYMENTS" == skip ]]; then
+            printf 'policy=%s\n' "$UNCHANGED_DEPLOYMENTS" >> "$GITHUB_OUTPUT"
+          fi
       - name: Compare with the active verified public deployment
         id: compare-public-inputs
         if: >-
@@ -208,6 +211,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+          COURSE_VERIFICATION: ${{ vars.STUDY_HUB_COURSE_VERIFICATION }}
           STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
         run: node --import tsx tools/ci/public-deployment-checkpoint.ts compare
       - name: Skip a verified unchanged course deployment
@@ -443,3 +447,18 @@ jobs:
         if: >-
           ${{ steps.record-public-checkpoint.outcome == 'failure' || steps.upload-public-checkpoint.outcome == 'failure' }}
         run: echo '::warning::CI_PUBLIC_CHECKPOINT_NOT_SAVED'
+      - name: Measure browser verification for changed courses
+        id: observe-course-verification
+        if: >-
+          ${{ vars.STUDY_HUB_COURSE_VERIFICATION == 'observe' && steps.publish.outcome == 'success' &&
+              steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.changed_courses != '' }}
+        continue-on-error: true
+        timeout-minutes: 12
+        env:
+          CHANGED_COURSES: ${{ steps.compare-public-inputs.outputs.changed_courses }}
+        run: |
+          node tools/ci/process-boundary.ts probe-processes "$RUNNER_TEMP/study-hub-trusted.json"
+          result=0
+          timeout --kill-after=15s 10m node --import tsx tools/ci/observe-course-verification.ts .local/ci-sources.json "$CHANGED_COURSES" || result=$?
+          node tools/ci/process-boundary.ts check "$RUNNER_TEMP/study-hub-trusted.json"
+          if [ "$result" -ne 0 ]; then echo '::warning::CI_COURSE_COMPARISON_UNAVAILABLE'; exit 1; fi

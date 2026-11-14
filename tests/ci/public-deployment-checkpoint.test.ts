@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import {
-  checkpointFromReceipt, comparePublicCheckpoint, readPreviousCheckpoint,
+  checkpointFromReceipt, comparePublicInputs, readPreviousCheckpoint,
 } from '../../tools/ci/public-deployment-checkpoint.js';
 
 const runId = '12345678901';
@@ -42,14 +42,31 @@ test('requires successful public verification and valid IDs', () => {
 test('ties the checkpoint to the target, input, deployment and version', async () => {
   const checkpoint = checkpointFromReceipt(input);
   const matching = { checkpoint, appSha, inputHash, target, readActive: async () => active };
-  expect(await comparePublicCheckpoint(matching)).toBe('match');
+  expect(await comparePublicInputs(matching)).toEqual({ match: true, changedCourses: [] });
   for (const update of [
     { checkpoint: null }, { appSha: 'f'.repeat(40) }, { inputHash: 'f'.repeat(64) },
     { target: { ...target, workerId: 'f'.repeat(32) } },
     { readActive: async () => ({ ...active, deploymentId: changedId }) },
     { readActive: async () => ({ ...active, versionId: changedId }) },
     { readActive: async () => { throw Error('private details'); } },
-  ]) expect(await comparePublicCheckpoint({ ...matching, ...update })).toBe('build');
+  ]) expect(await comparePublicInputs({ ...matching, ...update })).toEqual({ match: false, changedCourses: [] });
+});
+
+test('observes every changed course against the current verified deployment', async () => {
+  const courseHashes = Object.fromEntries(['logic-lab', 'life-science', 'circuits-2', 'data-structures', 'ml-basics']
+    .map(id => [id, 'a'.repeat(64)]));
+  const checkpoint = checkpointFromReceipt({ ...input, courseHashes });
+  const current = { checkpoint, appSha, inputHash: 'b1'.repeat(32), target, readActive: async () => active,
+    courseHashes: { ...courseHashes, 'life-science': 'b'.repeat(64), 'ml-basics': 'c'.repeat(64) } };
+  expect(checkpoint).toMatchObject({ schema: 2, courseHashes });
+  expect(await comparePublicInputs(current)).toEqual({ match: false, changedCourses: ['life-science', 'ml-basics'] });
+  for (const update of [
+    { checkpoint: checkpointFromReceipt(input) }, { appSha: 'b'.repeat(40) },
+    { readActive: async () => ({ ...active, deploymentId: changedId }) },
+    { courseHashes: Object.fromEntries(Object.keys(courseHashes).map(id => [id, 'd'.repeat(64)])) },
+  ]) expect(await comparePublicInputs({ ...current, ...update })).toEqual({ match: false, changedCourses: [] });
+  expect(await comparePublicInputs({ ...current, inputHash, courseHashes: current.courseHashes }))
+    .toEqual({ match: false, changedCourses: [] });
 });
 
 let scratch: string | undefined;
