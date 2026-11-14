@@ -36,10 +36,16 @@ test('supports Korean composition and displays the repository for a selected cou
   await expect(page.locator('#course-repository')).toHaveText('fixture');
   await expect(page.locator('#course-repository')).toBeVisible();
   const search = page.getByRole('searchbox');
-  await search.dispatchEvent('compositionstart');
-  await search.fill('생명과학 정리노트');
-  await expect(page.getByRole('heading', {name:'생명과학', exact:true})).toBeVisible();
-  await search.dispatchEvent('compositionend');
+  await search.focus();
+  const whileComposing = await search.evaluate((input: HTMLInputElement) => {
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    input.value = '생명과학 정리노트';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    const heading = document.querySelector('#list-heading')?.textContent;
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    return heading;
+  });
+  expect(whileComposing).toBe('생명과학');
   await expect(page.getByRole('heading', {name:'검색 결과'})).toBeVisible();
   await expect(page.locator('#course-repository')).toBeHidden();
 });
