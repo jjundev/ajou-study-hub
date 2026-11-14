@@ -16,29 +16,29 @@ async function open(page: import('@playwright/test').Page) {
   await page.goto('/');
 }
 for (const width of [390, 1440]) test.describe(`responsive_catalog ${width}`, () => {
- test.use({ viewport: { width, height: width === 390 ? 844 : 900 } });
- test('browses_courses', async ({ page }) => {
-  await open(page);
-  for (const name of names) await expect(page.getByRole('button', { name: new RegExp(`^${name}`) })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '실험01' })).toBeVisible();
-  await expect(page.getByText('정리노트', { exact: true })).toHaveCount(2);
-  for (const label of ['문제설명', '인터랙티브', '기타 자료']) await expect(page.getByText(label, { exact: true })).toHaveCount(1);
-  await expect(page.getByText('자료 5개', { exact: true })).toBeVisible();
-  await expect(page.locator('[data-material-type=review]')).toHaveCount(0);
-  if (process.env.CATALOG_SCREENSHOTS) await page.screenshot({ path: `.reports/task-5-${width}.png`, fullPage: true });
-  await page.getByRole('button', { name: /생명과학.*1/ }).click();
-  await expect(page.getByRole('heading', { name: '10월 12일' })).toBeVisible();
-  await page.getByRole('button', { name: /생명과학 정리노트/ }).focus();
-  await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: '생명과학 정리노트' })).toBeVisible();
-  if (width === 390) {
-    await expect(page.getByRole('button', { name: '자료 목록 열기' })).toHaveAttribute('aria-expanded', 'false');
-    if (process.env.CATALOG_SCREENSHOTS) await page.screenshot({ path: '.reports/task-5-390-collapsed.png', fullPage: true });
-    await page.getByRole('button', { name: '자료 목록 열기' }).click();
-    await expect(page.getByRole('button', { name: '자료 목록 접기' })).toHaveAttribute('aria-expanded', 'true');
-  }
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
- });
+  test.use({ viewport: { width, height: width === 390 ? 844 : 900 } });
+  test('browses_courses', async ({ page }) => {
+    await open(page);
+    for (const name of names) await expect(page.getByRole('button', { name: new RegExp(`^${name}`) })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '실험01' })).toBeVisible();
+    await expect(page.getByText('정리노트', { exact: true })).toHaveCount(2);
+    for (const label of ['문제설명', '인터랙티브', '기타 자료']) await expect(page.getByText(label, { exact: true })).toHaveCount(1);
+    await expect(page.getByText('자료 5개', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-material-type=review]')).toHaveCount(0);
+    if (process.env.CATALOG_SCREENSHOTS) await page.screenshot({ path: `.reports/task-5-${width}.png`, fullPage: true });
+    await page.getByRole('button', { name: /생명과학.*1/ }).click();
+    await expect(page.getByRole('heading', { name: '10월 12일' })).toBeVisible();
+    await page.getByRole('button', { name: /생명과학 정리노트/ }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { name: '생명과학 정리노트' })).toBeVisible();
+    if (width === 390) {
+      await expect(page.getByRole('button', { name: '자료 목록 열기' })).toHaveAttribute('aria-expanded', 'false');
+      if (process.env.CATALOG_SCREENSHOTS) await page.screenshot({ path: '.reports/task-5-390-collapsed.png', fullPage: true });
+      await page.getByRole('button', { name: '자료 목록 열기' }).click();
+      await expect(page.getByRole('button', { name: '자료 목록 접기' })).toHaveAttribute('aria-expanded', 'true');
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
 });
 test('searches_metadata_only and empty states', async ({ page }) => {
   await open(page);
@@ -108,4 +108,34 @@ test('browse restoration is silent and selection/destroy expose the integration 
   expect(events.selections).toEqual(['d1']);
   expect(events.browses).toHaveLength(1);
   expect(events.remaining).toBe(0);
+});
+
+test('displays check and comic material type labels for 확인문제 and 학습만화', async ({ page }) => {
+  const withTypes = structuredClone(catalog);
+  withTypes.documents.push(
+    {
+      id: 'd-check',
+      courseId: 'c3',
+      groupId: 'g3',
+      title: '자료구조 확인문제',
+      type: 'check',
+      sourcePath: '복습노트/1102/확인문제_1102_Tree.html',
+      url: '/content/check.html',
+      listed: true,
+    },
+    {
+      id: 'd-comic',
+      courseId: 'c1',
+      groupId: 'g1',
+      title: '생명과학 1112 학습만화',
+      type: 'comic',
+      sourcePath: '복습노트/1112/학습만화_1112_Nervous_and_Sensory_Systems.html',
+      url: '/content/comic.html',
+      listed: true,
+    },
+  );
+  await page.route('**/catalog.json', route => route.fulfill({ json: withTypes }));
+  await page.goto('/');
+  await expect(page.locator('[data-material-type=check] .material-type')).toHaveText('확인문제');
+  await expect(page.locator('[data-material-type=comic] .material-type')).toHaveText('학습만화');
 });

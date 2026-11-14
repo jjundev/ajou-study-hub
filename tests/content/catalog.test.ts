@@ -145,11 +145,13 @@ test("classifies all supported filename forms with ordered course rules", async 
       ["정리노트_추가.html", "note"],
       ["복습문제_추가.html", "review"],
       ["문제풀이.html", "review"],
+      ["확인문제_추가.html", "check"],
       ["문제설명_추가.html", "explanation"],
       ["실험02_문제설명.html", "explanation"],
       ["실험02_기출풀이.html", "explanation"],
       ["인터렉티브_퀴즈.html", "interactive"],
       ["인터랙티브_퀴즈.html", "interactive"],
+      ["학습만화_추가.html", "comic"],
     ];
     for (const [filename] of cases)
       await f.write(`복습노트/1001/${filename}`, "");

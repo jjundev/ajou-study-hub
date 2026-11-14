@@ -12,7 +12,7 @@ const documentSearch = '?mode=review&item=one&item=two&value=a%2Bb%2F%ED%95%9C%E
 async function setup(page: import('@playwright/test').Page, beforeB?: () => Promise<void>, startup = '') {
  const bundle=await build({stdin:{contents:"import {installReaderBridge} from './src/compat/reader-bridge.ts';installReaderBridge(window.__STUDY_HUB__.document.id);",resolveDir:process.cwd()},bundle:true,format:'iife',write:false});
  await page.route('**/catalog.json',r=>r.fulfill({json:catalog}));
- await page.route('**/content/**',async r=>{
+ await page.route(url=>url.pathname.startsWith('/content/'),async r=>{
   const path=decodeURIComponent(new URL(r.request().url()).pathname);
   const doc=docs.find(d=>decodeURIComponent(d.url)===path);
   if(!doc||doc.id==='doc-missing')return r.fulfill({status:404,body:'missing'});

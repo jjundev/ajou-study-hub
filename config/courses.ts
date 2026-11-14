@@ -49,11 +49,13 @@ const typeRules: TypeRule[] = [
     pattern: "^(복습문제|실험\\d{2}_기출문제|문제풀이\\.html$)",
     type: "review",
   },
+  { pattern: "^확인문제", type: "check" },
   {
     pattern: "^(문제설명|실험\\d{2}_(문제설명|기출풀이))",
     type: "explanation",
   },
   { pattern: "^(인터렉티브|인터랙티브)", type: "interactive" },
+  { pattern: "^학습만화", type: "comic" },
 ];
 export const courses: CourseConfig[] = [
   ["logic-lab", "논리회로실험", "jjundev/ajou-nonhoesil"],

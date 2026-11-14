@@ -1,9 +1,13 @@
-export type MaterialType =
-  | "note"
-  | "review"
-  | "explanation"
-  | "interactive"
-  | "other";
+export const materialTypes = [
+  "note",
+  "review",
+  "check",
+  "explanation",
+  "interactive",
+  "comic",
+  "other",
+] as const;
+export type MaterialType = (typeof materialTypes)[number];
 export type Course = {
   id: string;
   name: string;

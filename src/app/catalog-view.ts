@@ -1,7 +1,7 @@
 import type { Catalog, DocumentInfo, MaterialType } from '../content/model.js';
 
 export type BrowseState = { courseId?: string; groupId?: string; query?: string };
-const labels: Record<MaterialType, string> = { note: '정리노트', review: '복습문제', explanation: '문제설명', interactive: '인터랙티브', other: '기타 자료' };
+const labels: Record<MaterialType, string> = { note: '정리노트', review: '복습문제', check: '확인문제', explanation: '문제설명', interactive: '인터랙티브', comic: '학습만화', other: '기타 자료' };
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string) {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
