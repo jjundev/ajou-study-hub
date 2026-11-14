@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import {
-  readActiveVersion, readWorkerTarget, validatePublicSettings,
+  readActiveDeployment, readActiveVersion, readWorkerTarget, validatePublicSettings,
   type PublicDeploymentSettings,
 } from '../../tools/deploy/worker-target.js';
 
@@ -14,6 +14,7 @@ const target: PublicDeploymentSettings = {
 const versionId = '22222222-2222-2222-2222-222222222222';
 const base = '/client/v4/accounts/' + target.accountId;
 const zoneId = 'c'.repeat(32);
+const deploymentId = '44444444-4444-4444-4444-444444444444';
 
 function api(mode = 'ok') {
   const calls: string[] = [];
@@ -35,7 +36,7 @@ function api(mode = 'ok') {
       ? [{ id: 'route-id', pattern: 'example.org/*', script: target.workerName }]
       : [],
     [base + '/workers/scripts/ajou-study-hub/deployments']: {
-      deployments: [{ id: '44444444-4444-4444-4444-444444444444', strategy: 'percentage', versions }],
+      deployments: [{ id: deploymentId, strategy: 'percentage', versions }],
     },
   };
   const request: typeof fetch = async (input, init) => {
@@ -53,6 +54,11 @@ function api(mode = 'ok') {
   };
   return { calls, options: { fetch: request, token: 'test-read-token' } };
 }
+
+test('returns the active deployment row ID with its 100 percent version', async () => {
+  const { options } = api();
+  expect(await readActiveDeployment(target, options)).toEqual({ deploymentId, versionId });
+});
 
 test('reads the pinned public Worker and its single active version without Access calls', async () => {
   const { calls, options } = api();

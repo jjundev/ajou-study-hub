@@ -9,7 +9,9 @@ import type { BuildReport } from '../../tools/content/report.js';
 
 const mocks = vi.hoisted(() => ({ readTarget: vi.fn(), readActive: vi.fn(), upload: vi.fn() }));
 vi.mock('../../tools/deploy/worker-target.js', async original => ({
-  ...await original<object>(), readWorkerTarget: mocks.readTarget, readActiveVersion: mocks.readActive,
+  ...await original<object>(), readWorkerTarget: mocks.readTarget,
+  readActiveVersion: async (...args: unknown[]) => (await mocks.readActive(...args)).versionId,
+  readActiveDeployment: mocks.readActive,
 }));
 vi.mock('../../tools/deploy/wrangler-upload.js', async original => ({
   ...await original<object>(), runWranglerUpload: mocks.upload,
@@ -22,6 +24,9 @@ const target = {
 };
 const previous = '11111111-1111-1111-1111-111111111111';
 const uploaded = '22222222-2222-2222-2222-222222222222';
+const priorDeployment = '33333333-3333-3333-3333-333333333333';
+const newDeployment = '44444444-4444-4444-4444-444444444444';
+const rollbackDeployment = '55555555-5555-5555-5555-555555555555';
 const html = '<title>아주 학습 자료실</title><div id="app"></div>';
 const catalog = '{"version":1,"courses":[],"groups":[],"documents":[]}';
 const file = 'content/복습 노트/문제.pdf';
@@ -115,9 +120,11 @@ async function releaseFixture() {
   vi.stubEnv('CLOUDFLARE_API_TOKEN', 'test-write-token');
   let active = previous;
   mocks.readTarget.mockResolvedValue({});
-  mocks.readActive.mockImplementation(async () => active);
+  let deploymentId = priorDeployment;
+  mocks.readActive.mockImplementation(async () => ({ deploymentId, versionId: active }));
   mocks.upload.mockImplementation(async () => {
     active = uploaded;
+    deploymentId = newDeployment;
     return { url: target.productionUrl, versionId: uploaded };
   });
   const preflight = anonymousRequest();
@@ -130,7 +137,7 @@ async function releaseFixture() {
     return new Response(new Uint8Array(bytes), { status: row ? 200 : 404, headers: { 'content-type': type } });
   }) satisfies typeof fetch);
   return {
-    ...f, bundleHash, outputs,
+    ...f, bundleHash, outputs, rollback: () => { deploymentId = rollbackDeployment; },
     run: () => releasePublic({ testProjectRoot: f.root, activationDelays: [], propagationDelays: [0] }),
     report: async () => JSON.parse(await readFile(resolve(f.root, '.reports/public-release.json'), 'utf8')),
   };
@@ -142,9 +149,20 @@ test('publishes the sealed bundle once and records the previous and confirmed ve
   expect(mocks.upload).toHaveBeenCalledTimes(1);
   expect(await f.report()).toMatchObject({
     status: 'published-public-verified', previousVersionId: previous, versionId: uploaded,
-    currentVersionId: uploaded, bundleHash: f.bundleHash, checked: f.outputs.length,
+    currentVersionId: uploaded, deploymentId: newDeployment, bundleHash: f.bundleHash, checked: f.outputs.length,
   });
   expect(JSON.stringify(await f.report())).not.toContain('test-read-token');
+});
+
+test('rejects a different deployment ID with the same version during public checks', async () => {
+  const f = await releaseFixture();
+  const serve = globalThis.fetch;
+  vi.stubGlobal('fetch', (async (input, init) => {
+    if (new URL(String(input)).pathname === '/assets/app.js') f.rollback();
+    return serve(input, init);
+  }) satisfies typeof fetch);
+  await expect(f.run()).rejects.toThrow(/changed during public response/);
+  expect(await f.report()).toMatchObject({ status: 'uploaded-postcheck-pending', currentVersionId: uploaded });
 });
 
 test('waits for public content to catch up to the active version without reuploading', async () => {
@@ -169,7 +187,7 @@ test.each(['upload', 'version', 'body'])('preserves the receipt on %s failure wi
   if (mode === 'version') mocks.upload.mockResolvedValue({ url: target.productionUrl, versionId: uploaded });
   if (mode === 'body') mocks.upload.mockImplementation(async () => {
     vi.stubGlobal('fetch', anonymousRequest('login').request);
-    mocks.readActive.mockResolvedValue(uploaded);
+    mocks.readActive.mockResolvedValue({ deploymentId: newDeployment, versionId: uploaded });
     return { url: target.productionUrl, versionId: uploaded };
   });
   await expect(f.run()).rejects.toThrow();

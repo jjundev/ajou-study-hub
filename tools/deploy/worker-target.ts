@@ -10,6 +10,7 @@ export type WorkerTarget = {
 type TargetInput = Omit<WorkerTarget, 'workerName'> & { workerName: string; workerId?: string };
 export type PublicDeploymentSettings = WorkerTarget & { workerId: string };
 export type ReadOptions = { fetch?: typeof fetch; token?: string };
+export type ActiveDeployment = { deploymentId: string; versionId: string };
 type RecordValue = Record<string, unknown>;
 type WorkerInspection = {
   worker: RecordValue & { id: string };
@@ -109,7 +110,7 @@ export async function readWorkerTarget(target: TargetInput, options: ReadOptions
 const hasOnly = (value: RecordValue, keys: string[]) =>
   Object.keys(value).every(key => keys.includes(key));
 
-export async function readActiveVersion(target: TargetInput, options: ReadOptions = {}): Promise<string> {
+export async function readActiveDeployment(target: TargetInput, options: ReadOptions = {}): Promise<ActiveDeployment> {
   try {
     validateWorkerTarget(target);
     if ('workerId' in target) validatePublicSettings(target);
@@ -151,8 +152,12 @@ export async function readActiveVersion(target: TargetInput, options: ReadOption
     const version: unknown = current.versions[0];
     if (!isRecord(version) || !hasOnly(version, ['version_id', 'percentage']) || version.percentage !== 100 ||
         typeof version.version_id !== 'string' || !workerVersionId.test(version.version_id)) return fail();
-    return version.version_id;
+    return { deploymentId: current.id, versionId: version.version_id };
   } catch {
     throw Error('Cloudflare active Worker version could not be verified');
   }
+}
+
+export async function readActiveVersion(target: TargetInput, options: ReadOptions = {}): Promise<string> {
+  return (await readActiveDeployment(target, options)).versionId;
 }

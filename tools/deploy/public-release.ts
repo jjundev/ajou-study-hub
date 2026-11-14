@@ -8,7 +8,7 @@ import { validateReportPath, writeReport, type BuildReport } from '../content/re
 import { verificationProject } from '../verification-project.js';
 import { withSealedArtifact } from './release-artifact.js';
 import { runWranglerUpload } from './wrangler-upload.js';
-import { readActiveVersion, readWorkerTarget, validatePublicSettings, workerVersionId } from './worker-target.js';
+import { readActiveDeployment, readWorkerTarget, validatePublicSettings, workerVersionId, type ActiveDeployment } from './worker-target.js';
 
 type ProbeOptions = { fetch?: typeof fetch; timeoutMs?: number };
 type Output = BuildReport['outputs'][number];
@@ -184,7 +184,10 @@ type ReleaseOptions = {
   propagationDelays?: number[];
 };
 
-/** Publish exactly once. Only active-version and anonymous HTTP reads can retry. */
+const sameDeployment = (left: ActiveDeployment, right: ActiveDeployment) =>
+  left.deploymentId === right.deploymentId && left.versionId === right.versionId;
+
+/** Publish exactly once. Only active deployment and anonymous HTTP reads can retry. */
 export async function releasePublic(options: ReleaseOptions = {}) {
   const root = await verificationProject(options.testProjectRoot);
   const settingsPath = resolve(root, '.local/public-deployment.json');
@@ -204,19 +207,20 @@ export async function releasePublic(options: ReleaseOptions = {}) {
   await validateReportPath(lockPath, [dist], root);
   const lock = await open(lockPath, 'wx', 0o600);
   try {
-    let previousVersionId: string | undefined;
+    let previous: ActiveDeployment | undefined;
     const authorize = async () => {
       await readWorkerTarget(target, api);
-      const current = await readActiveVersion(target, api);
-      if (previousVersionId !== undefined && previousVersionId !== current)
-        throw Error('Active Worker version changed during public release preparation');
-      previousVersionId = current;
+      const current = await readActiveDeployment(target, api);
+      if (previous && !sameDeployment(previous, current))
+        throw Error('Active Worker deployment changed during public release preparation');
+      previous = current;
       await verifyExistingPublicSite(target.productionUrl);
     };
     return await withSealedArtifact(root, authorize, async (directory, configPath, manifest) => {
+      if (!previous) throw Error('Missing active Worker deployment before upload');
       const base = {
         url: target.productionUrl, workerId: target.workerId,
-        previousVersionId, bundleHash: manifest.bundleHash,
+        previousVersionId: previous.versionId, bundleHash: manifest.bundleHash,
       };
       const record = (details: object) =>
         writeReport({ ...base, ...details, checkedAt: new Date().toISOString() }, receiptPath, [dist, directory], root);
@@ -230,14 +234,15 @@ export async function releasePublic(options: ReleaseOptions = {}) {
       await record(pending);
       await readWorkerTarget(target, api);
 
-      let currentVersionId = await readActiveVersion(target, api);
+      let current = await readActiveDeployment(target, api);
       for (const wait of activationDelays) {
-        if (currentVersionId === receipt.versionId || currentVersionId !== previousVersionId) break;
+        if (current.versionId === receipt.versionId || !sameDeployment(previous, current)) break;
         await delay(wait);
-        currentVersionId = await readActiveVersion(target, api);
+        current = await readActiveDeployment(target, api);
       }
-      await record({ ...pending, currentVersionId });
-      if (currentVersionId !== receipt.versionId) throw Error('Public upload active version mismatch');
+      await record({ ...pending, currentVersionId: current.versionId });
+      if (current.versionId !== receipt.versionId) throw Error('Public upload active version mismatch');
+      const deployed = current;
       let checked: number;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -247,20 +252,23 @@ export async function releasePublic(options: ReleaseOptions = {}) {
           const wait = propagationDelays[attempt];
           if (!(error instanceof PublicProbeError) || !error.mayBePropagating || wait === undefined) throw error;
           await delay(wait);
-          currentVersionId = await readActiveVersion(target, api);
-          if (currentVersionId !== receipt.versionId) {
-            await record({ ...pending, currentVersionId });
-            throw Error('Active version changed before public response verification could retry');
+          current = await readActiveDeployment(target, api);
+          if (!sameDeployment(deployed, current)) {
+            await record({ ...pending, currentVersionId: current.versionId });
+            throw Error('Active deployment changed before public response verification could retry');
           }
         }
       }
-      currentVersionId = await readActiveVersion(target, api);
-      if (currentVersionId !== receipt.versionId) {
-        await record({ ...pending, currentVersionId });
-        throw Error('Active version changed during public response verification');
+      current = await readActiveDeployment(target, api);
+      if (!sameDeployment(deployed, current)) {
+        await record({ ...pending, currentVersionId: current.versionId });
+        throw Error('Active deployment changed during public response verification');
       }
       const catalogHash = manifest.outputs.find(row => row.path === 'catalog.json')!.sha256;
-      const result = { ...base, versionId: receipt.versionId, currentVersionId, checked, catalogHash };
+      const result = {
+        ...base, versionId: receipt.versionId, currentVersionId: current.versionId,
+        deploymentId: current.deploymentId, checked, catalogHash,
+      };
       await record({ ...result, status: 'published-public-verified' });
       return result;
     }, { publicTarget: target });
