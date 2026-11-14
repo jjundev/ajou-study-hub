@@ -200,7 +200,26 @@ jobs:
       - name: Build and verify the same pinned material checkout
         run: |
           npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }
-          if ! npm run verify:content -- --sources .local/ci-sources.json > /dev/null 2>&1; then
+          verify_material() {
+            npm run verify:content -- --sources .local/ci-sources.json > /dev/null 2>&1
+          }
+          if ! verify_material; then
+            if node --input-type=module <<'RETRY'
+          import {readFile} from 'node:fs/promises';
+          try {
+            const report=JSON.parse(await readFile('.reports/verification.json','utf8'));
+            const errors=report.issues.filter(issue=>issue.severity==='error');
+            const mayRetry=report.status==='complete' && report.representatives.complete &&
+              errors.length===1 && errors.every(({code,reason})=>
+                code==='runtime-external-representative-requestfailed' &&
+                /^(?:net::ERR_ABORTED|NS_BINDING_ABORTED|Cancelled|cancelled)$/.test(reason));
+            process.exitCode=mayRetry?0:1;
+          } catch { process.exitCode=1; }
+          RETRY
+            then
+              echo CI_RETRY_AFTER_EXTERNAL_REQUEST_CANCELLED
+              if verify_material; then exit 0; fi
+            fi
             node --input-type=module <<'NODE'
           import {readFile} from 'node:fs/promises';
           try {

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { build } from "esbuild";
 import { transformHtml } from "../../tools/content/transform.js";
-import { pagerHistory } from "../../tools/representatives.js";
+import { pagerHistory, trackRepresentativeRequests } from "../../tools/representatives.js";
 import type { Catalog, DocumentInfo } from "../../src/content/model.js";
 test("representative pager check requires rendered source history after actual Next actions", async ({
   page,
@@ -53,4 +53,18 @@ test("representative pager check requires rendered source history after actual N
   await page.goto("/#/read/" + doc.id);
   const result = await pagerHistory(page, page.frameLocator("iframe"));
   expect(result).toEqual({ initial: "s0", first: "s1", second: "s2" });
+});
+
+test("waits for a representative's delayed requests before the verifier reloads it", async ({ page }) => {
+  let responseSent = false;
+  await page.route("**/slow-representative-resource", async route => {
+    await new Promise(resolve => setTimeout(resolve, 700));
+    await route.fulfill({ body: "ok" });
+    responseSent = true;
+  });
+  await page.goto("/");
+  const settle = trackRepresentativeRequests(page);
+  await page.evaluate(() => { void fetch("/slow-representative-resource"); });
+  await settle();
+  expect(responseSent).toBe(true);
 });

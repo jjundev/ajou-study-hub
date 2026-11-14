@@ -9,6 +9,21 @@ import {
 import type { Catalog } from "../src/content/model.js";
 import { storageNamespace } from "./content/transform.js";
 import type { Observation } from "./verify-content.js";
+import { waitForSettledRequests, type RequestSettlement } from "./runtime-readiness.js";
+export function trackRepresentativeRequests(page: Page) {
+  const state: RequestSettlement = { pending: new Map(), lastActivity: Date.now() };
+  page.on("request", request => {
+    state.pending.set(request, request.url());
+    state.lastActivity = Date.now();
+  });
+  const finish = (request: unknown) => {
+    state.pending.delete(request);
+    state.lastActivity = Date.now();
+  };
+  page.on("requestfinished", finish);
+  page.on("requestfailed", finish);
+  return () => waitForSettledRequests(state);
+}
 export const representativePaths = [
   ["life-science", "복습노트/0901/복습문제_0901_Biomolecules_and_Cells.html"],
   ["data-structures", "복습노트/1012/정리노트_1012_Queue.html"],
@@ -18,7 +33,7 @@ export const representativePaths = [
   ["logic-lab", "복습노트/실험01/실험01_기출문제.html"],
   ["circuits-2", "복습노트/0909/문제설명_0909_Cascode_Stage.html"],
 ] as const;
-export async function pagerHistory(page: Page, frame: FrameLocator) {
+export async function pagerHistory(page: Page, frame: FrameLocator, settle = trackRepresentativeRequests(page)) {
   const current = () => frame.locator(".screen.is-current").getAttribute("id");
   const routeAnchor = () =>
     page.evaluate(() =>
@@ -33,12 +48,15 @@ export async function pagerHistory(page: Page, frame: FrameLocator) {
   await expect.poll(current).not.toBe(first);
   const second = await current();
   await expect.poll(routeAnchor).toBe(second);
+  await settle();
   await page.goBack();
   await expect.poll(current).toBe(first);
   await expect.poll(routeAnchor).toBe(first);
+  await settle();
   await page.goForward();
   await expect.poll(current).toBe(second);
   await expect.poll(routeAnchor).toBe(second);
+  await settle();
   await page.reload();
   await expect.poll(current).toBe(second);
   return { initial, first, second };
@@ -83,6 +101,7 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
             };
             scenarios.push(scenario);
             const page = await context.newPage();
+            const settle = trackRepresentativeRequests(page);
             page.on("pageerror", (e) =>
               observations.push({
                 documentId: doc.id,
@@ -225,7 +244,7 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                 );
               } else {
                 await expect(frame.locator("#pager-next")).toBeVisible();
-                await pagerHistory(page, frame);
+                await pagerHistory(page, frame, settle);
                 scenario.checks.push(
                   "source Next twice, parent back/forward, refresh preserves screen",
                 );
@@ -257,6 +276,7 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                     );
                   expect((await attempts()).length).toBeGreaterThan(0);
                   const saved = await attempts();
+                  await settle();
                   await page.reload();
                   expect(await attempts()).toEqual(saved);
                   scenario.checks.push(
@@ -352,6 +372,7 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog) {
                   }
                 }
               }
+              await settle();
               scenario.passed = true;
             } catch (e) {
               scenario.error = (e as Error).message;
