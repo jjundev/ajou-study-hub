@@ -29,7 +29,8 @@
     "access:automation-readiness": "tsx tools/deploy/auto-readiness.ts",
     "access:rehearse-recovery": "tsx tools/deploy/recovery-operator.ts",
     "deploy:automatic": "tsx tools/deploy/auto-release.ts",
-    "deploy:private": "tsx tools/cli.ts deploy:private"
+    "deploy:private": "tsx tools/cli.ts deploy:private",
+    "deploy:public": "tsx tools/deploy/public-release.ts"
   },
   "dependencies": {
     "parse5": "8.0.1",

@@ -1,4 +1,64 @@
-# 개인 자료 배포 운영
+# 자료실 배포 운영
+
+## 운영 주소에 수동 공개 게시
+
+현재 운영 주소는 비로그인 요청을 받습니다. 첫 공개 갱신은 기존 Worker
+`ajou-study-hub`에 수동으로 게시합니다. 운영 주소 하나를 사용하며 preview,
+커스텀 도메인, zone route가 비활성 상태인지 확인합니다.
+
+1. [자동 갱신 운영](automatic-updates.md)에 따라 `STUDY_HUB_AUTOMATIC_UPDATES`를
+   `disabled`로 설정하고 진행 중인 게시를 확인합니다. GitHub Actions에서
+   `mode:verify`를 실행하고 앱 및 과목별 체크아웃 커밋 5개를 기록합니다.
+2. 같은 커밋을 체크아웃하고 `.local/sources.json`에 원본을 지정합니다.
+   아래 명령으로 최종 파일 목록과 새 브라우저 검증 증거를 만듭니다.
+
+   ```powershell
+   npm run build -- --sources .local/sources.json
+   npm run verify:content -- --sources .local/sources.json
+   ```
+
+3. Cloudflare에서 독립 조회한 계정과 Worker ID를 `.local/public-deployment.json`에
+   넣습니다. `workerId`는 Workers 목록과 상세 조회에서 확인한 고유 ID입니다.
+
+   ```json
+   {
+     "accountId": "32자리 Cloudflare 계정 ID",
+     "workerName": "ajou-study-hub",
+     "workerId": "32자리 Cloudflare Worker ID",
+     "productionUrl": "https://ajou-study-hub.johnshin617.workers.dev",
+     "previewUrls": []
+   }
+   ```
+
+4. `CLOUDFLARE_READ_TOKEN`에는 Worker·배포·서브도메인과 계정의 zone/route를
+   조회할 읽기 토큰을, `CLOUDFLARE_API_TOKEN`에는 기존 계정에 Worker를 배포할
+   쓰기 토큰을 환경변수로 전달합니다. 토큰은 기존 비밀 전달 경로에서 불러오고
+   설정·명령 인자·로그에는 기록하지 않습니다. 토큰 만료와 조회 가능 여부를 확인합니다.
+5. 운영 카탈로그와 새 `dist/catalog.json`을 문서 ID로 대조합니다.
+   `.reports/app-build.json`의 PDF·이미지·JS·폰트 경로와 SHA-256을 검토하고
+   같은 번들에서 `npm run deploy:public`을 한 번 실행합니다.
+
+공개 명령은 24시간 이내의 검증, 고정 원본, 파일 수와 크기, 봉인된 사본을
+확인합니다. 읽기 API로 대상 ID·호스트·단일 활성 버전을 확인하고, 인증정보 없는
+GET으로 운영 홈과 카탈로그를 엽니다. 게시 후에는 운영 버전이 Wrangler 영수증과
+일치해야 합니다. 배포 목록에서 HTTP로 제공하는 파일의 크기·SHA-256·형식별 MIME을
+대조하고, 홈 리다이렉트와 존재하지 않는 경로의 404 본문을 확인합니다.
+`checked`는 검사한 배포 파일 수로 404 본문을 포함합니다. `_headers`와
+`_redirects`는 호스팅 설정 파일입니다.
+
+`.reports/public-release.json`에는 URL, 이전 버전과 번들 해시를 업로드 직전에
+기록합니다. `upload-started-outcome-unknown`이면 Dashboard에서 현재 활성 버전을
+먼저 확인합니다. `uploaded-postcheck-pending`이면 영수증의 `versionId`와 현재
+활성 버전을 대조합니다. 새 버전에서 자료 확인이 실패하면 같은 Worker의
+`previousVersionId`로 트래픽을 복구하고 활성 버전과 비로그인 카탈로그를 확인합니다.
+실행이 비정상 종료되어 `.reports/public-release.lock`이 남으면, 같은 명령이 실행 중인지
+확인하고 현재 버전과 영수증을 대조한 뒤 남은 잠금 파일을 제거합니다.
+
+`published-public-verified`와 `checked`가 기록되면 새 Chromium 세션에서 5과목,
+11월 자료, 실험 07~09의 문서와 동적 그림, 대표 PDF를 엽니다. 운영 버전 ID와
+문서·파일 검사 개수를 기록합니다.
+
+## 기존 비공개 배포 이력
 
 2026-10-26(한국시간) 현재 실제 계정 설정·빈 앱의 v2 보호 검증을 마치고 실제 학습 자료를 비공개 사이트에 게시했습니다. 운영 URL·버전 영수증과 게시 후 실제 자료 12개 대표 경로의 원본 바이트·접근 차단 검사를 확인했습니다. 검사 전후 독립된 두 신원과 공식 정책 판정, 보호 설정이 일치했습니다. 실제 휴대폰/PC에서 사용자가 대표 자료를 조작하는 인수는 별도 대기 중입니다. 이 문서의 클라우드 변경 단계는 사용자가 요청한 배포 범위 안에서 수행합니다.
 

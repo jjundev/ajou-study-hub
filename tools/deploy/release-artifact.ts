@@ -10,6 +10,7 @@ import { assertCurrentBundle } from '../runtime-server.js';
 import { verificationProject } from '../verification-project.js';
 import { validateReportPath, type BuildReport } from '../content/report.js';
 import { validatePublicSettings, type PublicDeploymentSettings } from './worker-target.js';
+import { courses } from '../../config/courses.js';
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 async function validateProjectConfig(root:string):Promise<string>{
  const path=resolve(root,'wrangler.jsonc');if((await lstat(path)).isSymbolicLink())throw Error('Symlink Wrangler configuration');
@@ -60,6 +61,9 @@ export async function withSealedArtifact<T>(
  const reportText=await readFile(reportPath,'utf8'),proofText=await readFile(proofPath,'utf8');
  const manifest=JSON.parse(reportText) as BuildReport,proof=JSON.parse(proofText);
  await assertCurrentBundle(dist,manifest,root);await assertReleaseProof(root,dist,manifest,proof);
+ if(publicTarget && (manifest.sources.length!==courses.length || courses.some(course=>
+  !manifest.sources.some(source=>source.courseId===course.id && !source.dirty && source.explicitUntracked.length===0))))
+  throw Error('Public release requires five clean pinned course checkouts');
  await assertCurrentSources(root,proof.sourceBinding,manifest);
  if(!same(await inventory(dist),manifest.outputs))throw Error('Final bundle size/inventory mismatch');
  await authorize();
