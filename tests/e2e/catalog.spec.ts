@@ -85,8 +85,11 @@ test('downloads review sheets and answers without leaving the lesson list', asyn
   await expect(pdf).toHaveAttribute('href', /^\/content\/ml-basics\/.*\/\.pack\/.*\.pdf$/);
   const before = page.url();
   for (const [link, suffix] of [[pdf, '문제'], [answer, '답안']] as const) {
+    const filename = `복습문제_1001_트리 순회-${suffix}.pdf`;
+    await expect(link).toHaveAttribute('download', filename);
     const [download] = await Promise.all([page.waitForEvent('download'), link.click()]);
-    expect(download.suggestedFilename().normalize('NFC')).toBe(`복습문제_1001_트리 순회-${suffix}.pdf`);
+    // Browser and filesystem sanitization can replace spaces and decompose Unicode.
+    expect([filename, filename.replaceAll(' ', '_')]).toContain(download.suggestedFilename().normalize('NFC'));
     expect(await readFile((await download.path())!, 'utf8')).toBe(`%PDF-1.4\n${suffix}\n`);
   }
   await expect(page).toHaveURL(before);
