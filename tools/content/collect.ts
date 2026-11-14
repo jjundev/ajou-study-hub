@@ -30,7 +30,7 @@ export async function collectDependencies(
     path: d.sourcePath,
   }));
   for (const group of catalog.groups)
-    for (const path of group.reviewPdfs ?? [])
+    for (const path of [...(group.reviewPdfs ?? []), ...(group.answerPdfs ?? [])])
       queue.push({ courseId: group.courseId, path });
   for (const config of configs)
     for (const path of config.extraFiles)

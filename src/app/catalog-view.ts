@@ -11,6 +11,8 @@ const curated: Record<string, { title: string; description?: string }> = lessonC
 const pageSize = 4;
 const recentKey = 'study-hub:recent:v1';
 const normalize = (value: string) => value.normalize('NFC').toLocaleLowerCase('ko-KR');
+const pdfLabels = { reviewPdfs: '복습문제 PDF', answerPdfs: '복습문제 해설지 PDF' } as const;
+const pdfTypes = ['reviewPdfs', 'answerPdfs'] as const;
 
 type Lesson = {
   group: Group;
@@ -18,7 +20,7 @@ type Lesson = {
   title: string;
   description?: string;
   documents: DocumentInfo[];
-  reviewPdfs: string[];
+  pdfs: { path: string; label: string }[];
 };
 type BrowsePosition = { hash: string; limit: number; top: number; courseLeft: number };
 
@@ -39,7 +41,8 @@ function makeLessons(catalog: Catalog, courses: Map<string, Course>): Lesson[] {
       const copy = curated[group.courseId + '/' + folder];
       lesson = {
         group, course: courses.get(group.courseId)!, title: copy?.title ?? group.title,
-        description: copy?.description ?? group.description, documents: [], reviewPdfs: group.reviewPdfs ?? [],
+        description: copy?.description ?? group.description, documents: [],
+        pdfs: pdfTypes.flatMap(key => (group[key] ?? []).map(path => ({ path, label: pdfLabels[key] }))),
       };
       lessons.set(group.id, lesson);
     }
@@ -53,7 +56,7 @@ function makeLessons(catalog: Catalog, courses: Map<string, Course>): Lesson[] {
     } satisfies Group;
     getLesson(group).documents.push(doc);
   }
-  for (const group of catalog.groups) if (group.reviewPdfs?.length) getLesson(group);
+  for (const group of catalog.groups) if (pdfTypes.some(key => group[key]?.length)) getLesson(group);
   return [...lessons.values()];
 }
 
@@ -144,7 +147,7 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog) {
   }
 
   function lessonRow(lesson: Lesson) {
-    const { course, group, title, description, documents, reviewPdfs } = lesson;
+    const { course, group, title, description, documents, pdfs } = lesson;
     const row = element('article', undefined, 'log-row');
     const meta = element('div', undefined, 'group-meta');
     meta.append(element('span', course.name, 'course-label'));
@@ -167,10 +170,10 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog) {
         links.append(materialLink(doc, false, counts.get(type)! > 1));
       }
       if (type !== 'review') continue;
-      for (const path of reviewPdfs) {
+      for (const { path, label } of pdfs) {
         const filename = path.split('/').at(-1)!.normalize('NFC');
-        const label = '복습문제 PDF';
-        const text = reviewPdfs.length > 1 ? `${label} · ${filename.replace(/(?:-문제)?\.pdf$/i, '')}` : label;
+        const hasMultiple = pdfs.filter(pdf => pdf.label === label).length > 1;
+        const text = hasMultiple ? `${label} · ${filename.replace(/(?:-문제|-답안)?\.pdf$/i, '')}` : label;
         const link = element('a', undefined, 'material-link');
         link.href = contentUrl(course.id, path);
         link.download = filename;
@@ -208,8 +211,8 @@ export function mountCatalog(root: HTMLElement, catalog: Catalog) {
         return tokens.every(token => haystack.includes(token));
       };
       const documents = lesson.documents.filter(doc => matches(doc.type, doc.title, doc.sourcePath));
-      const reviewPdfs = lesson.reviewPdfs.filter(path => matches('review', '복습문제 PDF', path));
-      return documents.length || reviewPdfs.length ? [{ ...lesson, documents, reviewPdfs }] : [];
+      const pdfs = lesson.pdfs.filter(({ path, label }) => matches('review', label, path));
+      return documents.length || pdfs.length ? [{ ...lesson, documents, pdfs }] : [];
     });
     const direction = state.sort === 'oldest' ? 1 : -1;
     const rank = { date: 0, experiment: 1, supplement: 2 };

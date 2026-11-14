@@ -50,7 +50,7 @@ export async function assertReleaseProof(root:string,directory:string,manifest:B
  const outputPaths=new Set(manifest.outputs.map(file=>file.path));
  for(const doc of catalog.documents)if(typeof doc.url!=='string'||!doc.url.startsWith('/content/')||!outputPaths.has(decodeURIComponent(doc.url.slice(1))))fail();
  if(!Array.isArray(catalog.groups))fail();
- for(const group of catalog.groups)for(const pdf of group.reviewPdfs??[])
+ for(const group of catalog.groups)for(const pdf of [...(group.reviewPdfs??[]),...(group.answerPdfs??[])])
   if(!outputPaths.has(`content/${group.courseId}/${pdf.normalize('NFC')}`))fail();
  for(const item of proof.documents){
   const doc=catalog.documents.find(d=>d.id===item.documentId);

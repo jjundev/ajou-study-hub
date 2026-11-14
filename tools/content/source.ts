@@ -14,6 +14,7 @@ export type SourceEntry = {
   courseId: string;
   groupPath: string;
   sourcePath: string;
+  download?: "reviewPdfs" | "answerPdfs";
 };
 export type SourceProvenance = {
   courseId: string;
@@ -110,17 +111,16 @@ export async function inspectSources(
       const depth = parts.length - content.length;
       const inLesson = depth === 2;
       const inPack = depth === 3 && parts.at(-2) === ".pack";
-      const reviewPdf =
-        ((inLesson || inPack) && /^복습문제_.+-문제\.pdf$/i.test(filename)) ||
-        (inLesson && filename === `${group}_기출문제.pdf`);
-      if (!(inLesson && /\.html?$/i.test(filename)) && !reviewPdf) continue;
+      const packKind = (inLesson || inPack) && /^복습문제_.+-(문제|답안)\.pdf$/i.exec(filename)?.[1];
+      const examKind = inLesson && /^실험\d+_기출(문제|풀이)\.pdf$/i.exec(filename)?.[1];
+      if (!(inLesson && /\.html?$/i.test(filename)) && !packKind && !examKind) continue;
       if ([...content, group, filename].some(s => s.startsWith(".") || /^backup[-_]/i.test(s)) ||
           /제작/.test(filename)) continue;
       const rule = config.groupRules.find((r) =>
         new RegExp(r.pattern).test(group),
       );
       if (!rule) continue;
-      if (filename.endsWith("_기출문제.pdf") && rule.kind !== "experiment") continue;
+      if (examKind && (rule.kind !== "experiment" || !filename.startsWith(group + "_"))) continue;
       if (rule.kind === "date") {
         const month = Number(group.slice(0, 2)),
           day = Number(group.slice(2));
@@ -131,6 +131,9 @@ export async function inspectSources(
         courseId: config.id,
         groupPath: config.contentRoot + "/" + group,
         sourcePath: p,
+        ...(packKind || examKind ? {
+          download: (packKind || examKind) === "문제" ? "reviewPdfs" : "answerPdfs",
+        } : {}),
       });
     }
   }

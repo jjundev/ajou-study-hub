@@ -24,6 +24,7 @@ export type Group = {
   date: string | null;
   order: number;
   reviewPdfs?: string[];
+  answerPdfs?: string[];
 };
 export type DocumentInfo = {
   id: string;

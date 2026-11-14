@@ -106,11 +106,11 @@ export async function buildCatalog(snapshot: SourceSnapshot): Promise<Catalog> {
       if (rule.kind === "date" && rule.title === undefined)
         noteHeadings.set(group, new Set());
     }
-    const basename = posix.basename(entry.sourcePath);
-    if (/\.pdf$/i.test(basename)) {
-      (group.reviewPdfs ??= []).push(entry.sourcePath);
+    if (entry.download) {
+      (group[entry.download] ??= []).push(entry.sourcePath);
       continue;
     }
+    const basename = posix.basename(entry.sourcePath);
     const type =
       config.typeRules.find((r) => new RegExp(r.pattern).test(basename))
         ?.type ?? "other";

@@ -6,7 +6,7 @@ import { materialTypes, type Catalog, type DocumentInfo } from './content/model.
 const root = document.querySelector<HTMLElement>('#app')!;
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 const strings = (value: Record<string, unknown>, keys: string[]) => keys.every(key => typeof value[key] === 'string');
-function validReviewPdfs(value: unknown, groupPath: string): boolean {
+function validPdfPaths(value: unknown, groupPath: string): boolean {
   if (value === undefined) return true;
   const prefix = groupPath + '/';
   return Array.isArray(value) && value.every(path => typeof path === 'string' &&
@@ -19,7 +19,7 @@ function isCatalog(value: unknown): value is Catalog {
   if (!courses.every(c => record(c) && strings(c, ['id', 'name', 'repo']) && c.semester === '2026-2')) return false;
   const courseIds = new Set(courses.map(c => c.id));
   if (courseIds.size !== courses.length) return false;
-  if (!groups.every(g => record(g) && strings(g, ['id', 'courseId', 'title', 'sourcePath']) && (g.description === undefined || typeof g.description === 'string') && courseIds.has(g.courseId) && ['date', 'experiment', 'supplement'].includes(g.kind as string) && (g.date === null || typeof g.date === 'string') && typeof g.order === 'number' && Number.isFinite(g.order) && validReviewPdfs(g.reviewPdfs, g.sourcePath as string))) return false;
+  if (!groups.every(g => record(g) && strings(g, ['id', 'courseId', 'title', 'sourcePath']) && (g.description === undefined || typeof g.description === 'string') && courseIds.has(g.courseId) && ['date', 'experiment', 'supplement'].includes(g.kind as string) && (g.date === null || typeof g.date === 'string') && typeof g.order === 'number' && Number.isFinite(g.order) && validPdfPaths(g.reviewPdfs, g.sourcePath as string) && validPdfPaths(g.answerPdfs, g.sourcePath as string))) return false;
   const groupIds = new Set(groups.map(g => g.id));
   if (groupIds.size !== groups.length) return false;
   const groupCourses = new Map(groups.map(g => [g.id, g.courseId]));
