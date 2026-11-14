@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { normalizeAccess, readAccessData, validateSettings, type AccessSnapshot, type AccessReadData, type DeploymentSettings, type ReadOptions } from './access.js';
+import { readActiveVersion } from './worker-target.js';
 export type AccessInspection={snapshot:AccessSnapshot;workerId:string;protectionFingerprint:string;versionId:string};
 type RecordValue=Record<string,unknown>;
 export const isRecord=(v:unknown):v is RecordValue=>v!==null&&typeof v==='object'&&!Array.isArray(v);
@@ -108,23 +109,10 @@ export function projectProtection(settings:DeploymentSettings,value:unknown):str
  const sort=sortCanonical;
  return canonical({accountId:settings.accountId,worker,apps:sort(data.apps),policies:Object.fromEntries(Object.entries(data.policies).map(([id,p])=>[id,sort(p)])),idps:sort(data.idps),hosts:sort(data.hosts),subscriptions:sort(data.subscriptions),organization:data.organization,...(data.exposure?{exposure:{...data.exposure,routes:sort(data.exposure.routes)}}:{})});
 }
-const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export async function readAccessInspection(settings:DeploymentSettings,options:ReadOptions={}):Promise<AccessInspection>{
  try{
   const opts={...options,token:options.token??process.env.CLOUDFLARE_READ_TOKEN??process.env.CLOUDFLARE_API_TOKEN};
   const data=await readAccessData(settings,opts),snapshot=normalizeAccess(settings,data),protectionFingerprint=sha256(projectProtection(settings,data));
-  if(!opts.token)fail();
-  const response=await (opts.fetch??fetch)(`https://api.cloudflare.com/client/v4/accounts/${settings.accountId}/workers/scripts/${settings.workerName}/deployments`,{headers:{Authorization:'Bearer '+opts.token},redirect:'error'});
-  if(!response.ok)fail();const envelope:unknown=await response.json();
-  exactKeys(envelope,['success','errors','messages','result','result_info'],['success','errors','result']);
-  if(envelope.success!==true||!Array.isArray(envelope.errors)||envelope.errors.length||envelope.messages!==undefined&&!Array.isArray(envelope.messages))fail();
-  if(envelope.result_info!==undefined)shape(envelope.result_info,{page:v=>v===1,total_pages:v=>v===1,count:v=>Number.isSafeInteger(v)&&(v as number)>=0,total_count:v=>Number.isSafeInteger(v)&&(v as number)>=0,per_page:v=>Number.isSafeInteger(v)&&(v as number)>0},[]);
-  exactKeys(envelope.result,['deployments']);const deployments=envelope.result.deployments;
-  if(!Array.isArray(deployments)||!deployments.length)fail();
-  if(isRecord(envelope.result_info)){const info=envelope.result_info;if(info.count!==undefined&&info.count!==deployments.length||info.total_count!==undefined&&info.total_count!==deployments.length||info.per_page!==undefined&&(info.per_page as number)<deployments.length)fail();}
-  const current=deployments[0];
-  shape(current,{id:v=>typeof v==='string'&&uuid.test(v),strategy:v=>v==='percentage',versions:items(nested({version_id:v=>typeof v==='string'&&uuid.test(v),percentage:v=>v===100},['version_id','percentage'])),created_on:string,source:string,author_email:string,annotations:nested({'workers/message':string,'workers/triggered_by':string})},['id','strategy','versions']);
-  if(!Array.isArray(current.versions)||current.versions.length!==1)fail();
-  return {snapshot,workerId:data.worker.id,protectionFingerprint,versionId:(current.versions[0] as RecordValue).version_id as string};
+  return {snapshot,workerId:data.worker.id,protectionFingerprint,versionId:await readActiveVersion(settings,opts)};
  }catch{throw Error('Access inspection failed; automation remains unauthorized');}
 }

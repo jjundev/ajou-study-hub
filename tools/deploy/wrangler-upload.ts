@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, resolve, basename } from 'node:path';
-import { validateSettings, type DeploymentSettings } from './access.js';
+import { validateWorkerTarget, workerVersionId, type WorkerTarget } from './worker-target.js';
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const version = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-export function fixedUploadConfig(settings: DeploymentSettings, directory: string) {
+type UploadTarget = Pick<WorkerTarget,'accountId'|'productionUrl'|'previewUrls'> & {workerName:string};
+export function fixedUploadConfig(settings: UploadTarget, directory: string) {
   return { name: settings.workerName, account_id: settings.accountId, compatibility_date: '2026-10-24', workers_dev: true, preview_urls: false,
     assets: { directory, html_handling: 'none', not_found_handling: '404-page' } };
 }
@@ -14,16 +14,16 @@ export function parseUploadReceipt(output: string, expectedUrl: string): { url: 
   const clean = output.replace(/\x1b\[[0-9;]*m/g, '');
   const ids = [...clean.matchAll(/^Current Version ID:\s*(\S+)\s*$/gm)];
   const urls = clean.split(/\r?\n/).map(s => s.trim()).filter(s => /^https?:\/\/\S+$/.test(s));
-  if (ids.length !== 1 || !version.test(ids[0]![1]!) || urls.length !== 1 || urls[0] !== expectedUrl)
+  if (ids.length !== 1 || !workerVersionId.test(ids[0]![1]!) || urls.length !== 1 || urls[0] !== expectedUrl)
     throw Error('Upload receipt does not confirm the protected target/version');
   return { url: expectedUrl, versionId: ids[0]![1]! };
 }
 /** Both upload paths use a sealed config and a fresh owned cwd, never project dotenv or inherited Wrangler overrides. */
-export async function runWranglerUpload(root: string, directory: string, configPath: string, settings: DeploymentSettings, token = process.env.CLOUDFLARE_API_TOKEN) {
-  validateSettings(settings);
+export async function runWranglerUpload(root: string, directory: string, configPath: string, settings: UploadTarget, token = process.env.CLOUDFLARE_API_TOKEN) {
+  validateWorkerTarget(settings);
   if (!token || settings.previewUrls.length) throw Error('Fixed upload credentials and target required');
   const cwd = dirname(configPath), owned = resolve(root, '.generated');
-  if (dirname(cwd) !== owned || !/^(private-release|bootstrap-upload)-[a-f0-9-]+$/.test(basename(cwd)) || configPath !== resolve(cwd, 'wrangler.json'))
+  if (dirname(cwd) !== owned || !/^(private-release|public-release|bootstrap-upload)-[a-f0-9-]+$/.test(basename(cwd)) || configPath !== resolve(cwd, 'wrangler.json'))
     throw Error('Upload requires an isolated owned configuration');
   let cursor = configPath;
   while (true) {

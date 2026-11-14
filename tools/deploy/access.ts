@@ -7,6 +7,8 @@ import { verificationProject } from '../verification-project.js';
 import { writeReport, type BuildReport } from '../content/report.js';
 import { inventory } from './bootstrap.js';
 import { readCloudflareList } from './cloudflare-list.js';
+import { cloudflareReader, readWorkerTarget, type ReadOptions } from './worker-target.js';
+export type { ReadOptions } from './worker-target.js';
 import { assertReleaseAllowed, sentinelPaths } from './guard.js';
 export type DeploymentSettings={accountId:string;workerName:string;allowedEmail:string;accessAppId:string;productionUrl:string;previewUrls:string[]};
 export type AccessSnapshot={accountId:string;workerName:string;accessAppId:string;allowedEmails:string[];workerWide:boolean;hasBypass:boolean;hosts:string[];freePlan:boolean;fingerprint:string;authDomain:string;otpProviderId:string};
@@ -70,31 +72,20 @@ export function normalizeAccess(settings:DeploymentSettings,data:AccessReadData)
  const fingerprint=hash(stable({worker,apps,policies,idps,hosts:expected,subscriptions,organization}));
  return {accountId:settings.accountId,workerName:settings.workerName,accessAppId:settings.accessAppId,allowedEmails:[settings.allowedEmail],workerWide:true,hasBypass:false,hosts:expected,freePlan:true,fingerprint,authDomain:organization.auth_domain,otpProviderId:app.allowed_idps[0]};
 }
-export type ReadOptions={fetch?:typeof fetch;token?:string};
 /** GET-only API; no auth bodies or Cloudflare error text escape this boundary. */
 export async function readAccessData(settings:DeploymentSettings,options:ReadOptions={}):Promise<AccessReadData>{
  try{
- validateSettings(settings);const token=options.token??process.env.CLOUDFLARE_API_TOKEN;if(!token)fail();const request=options.fetch??fetch;
+ validateSettings(settings);
  const base=`/accounts/${settings.accountId}`;
- async function get(path:string){const r=await request('https://api.cloudflare.com/client/v4'+path,{headers:{Authorization:`Bearer ${token}`},redirect:'error'});if(!r.ok)fail();const data:unknown=await r.json();if(!object(data)||data.success!==true||!('result'in data)||(Array.isArray(data.errors)&&data.errors.length))fail();return data;}
+ const get=cloudflareReader(options);
  const list=(path:string,mode:'paged'|'single'|'single-complete'='paged')=>readCloudflareList(get,path,mode);
- const workers=await list(base+'/workers/workers');const selected=workers.filter(w=>w.name===settings.workerName);if(selected.length!==1)fail();
- const worker=(await get(base+'/workers/workers/'+encodeURIComponent(selected[0]!.id))).result;if(!object(worker)||worker.id!==selected[0]!.id||worker.name!==settings.workerName)fail();
- const sub=(await get(base+'/workers/scripts/'+settings.workerName+'/subdomain')).result;
- const accountSub=(await get(base+'/workers/subdomain')).result;
- // Initial deployment supports read-confirmed disabled preview URLs. Any enabled preview
- // fails closed until a complete preview/version/custom-route inventory is implemented.
- if(!object(sub)||sub.enabled!==true||sub.previews_enabled!==false||settings.previewUrls.length||!object(accountSub)||typeof accountSub.subdomain!=='string')fail();
- if(!object(worker.references)||!Array.isArray(worker.references.domains)||worker.references.domains.length)fail();
- // Zone route inventory: reject all target script routes; worker-wide scope still protects
- // them, but accepting an unprobed address would make evidence incomplete.
- const zones=await list('/zones?account.id='+settings.accountId);const inspectedRoutes:Obj[]=[];
- for(const zone of zones){if(typeof zone.id!=='string')fail();const routes=await list('/zones/'+zone.id+'/workers/routes','single');if(routes.some(r=>r.script===settings.workerName))fail();inspectedRoutes.push(...routes);}
+ const target=await readWorkerTarget(settings,options);
  const apps=await list(base+'/access/apps');const policies:Record<string,Obj[]>={};
  for(const app of apps){if(typeof app.id!=='string')fail();policies[app.id]=await list(base+'/access/apps/'+encodeURIComponent(app.id)+'/policies');}
  const idps=await list(base+'/access/identity_providers','single'),subscriptions=await list(base+'/subscriptions','single-complete');
  const organization=(await get(base+'/access/organizations')).result;
- return {worker,apps,policies,idps,subscriptions,organization,exposure:{subdomain:sub,accountSubdomain:accountSub,routes:inspectedRoutes},hosts:[`https://${settings.workerName}.${accountSub.subdomain}.workers.dev`]};
+ if(!object(organization))fail();
+ return {...target,apps,policies,idps,subscriptions,organization};
  }catch{throw Error('Cloudflare Access read failed; protection remains unverified');}
 }
 /** Compatibility path retains the full legacy fingerprint and manual v2 contract. */
