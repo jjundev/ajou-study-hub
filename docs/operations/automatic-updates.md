@@ -6,14 +6,25 @@
 
 - GitHub Actions 변수 `STUDY_HUB_AUTOMATIC_UPDATES`가 정확히 `enabled`일 때 게시합니다. 다른 값이거나 수동 실행에서 `mode:verify`를 선택하면 검증까지만 합니다.
 - `STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS`에는 [수동 공개 게시](deployment.md#운영-주소에-수동-공개-게시)와 같은 JSON을 넣습니다. 계정과 Worker ID, 운영 주소를 확인하고 설정을 등록합니다.
-- Actions Secrets의 `CLOUDFLARE_READ_TOKEN`과 `CLOUDFLARE_API_TOKEN`은 공개 Worker의 읽기와 업로드에 쓰입니다. 배포 단계와 별도 토큰 갱신 단계에서 사용합니다.
+- Actions Secrets의 `CLOUDFLARE_READ_TOKEN`과 `CLOUDFLARE_API_TOKEN`은 공개 Worker의 읽기와 업로드에 쓰입니다. 배포와 별도 토큰 갱신에서 사용하며, 동일 입력 판정 단계에는 읽기 토큰만 전달합니다.
 - 과목 알림은 각 저장소의 `.github/workflows/notify-study-hub.yml`이 담당합니다. `npm run ci:notifiers`로 템플릿을 만들며, 기존 Dispatcher App의 `STUDY_HUB_DISPATCH_APP_ID`와 `STUDY_HUB_DISPATCH_PRIVATE_KEY`를 사용합니다.
 
 ## 실행 확인과 정지
 
-Actions 실행 요약에서 `published-public-verified`, 배포 버전 ID, 카탈로그 해시와 검사한 파일 수를 확인합니다. 로컬에서 수동 배포가 필요하면 [배포 운영 안내](deployment.md#운영-주소에-수동-공개-게시)를 따릅니다.
+Actions 실행 요약에서 `published-public-verified`, 배포 ID와 버전 ID, 카탈로그 해시와 검사한 파일 수를 확인합니다. 로컬에서 수동 배포가 필요하면 [배포 운영 안내](deployment.md#운영-주소에-수동-공개-게시)를 따릅니다.
 
 자동 게시를 멈추려면 `STUDY_HUB_AUTOMATIC_UPDATES`를 `disabled`로 바꾸고 실행 중인 배포가 있는지 확인합니다. `upload-started-outcome-unknown` 또는 `uploaded-postcheck-pending`이면 재실행 전에 현재 Worker 버전과 실행 요약의 이전 버전을 대조합니다. 게시 후 운영 응답 확인에 실패한 경우 [수동 복구 절차](deployment.md#운영-주소에-수동-공개-게시)를 따릅니다.
+
+## 게시 입력이 같은 과목 알림 생략
+
+`STUDY_HUB_UNCHANGED_DEPLOYMENTS`의 기본 동작은 전체 검증 및 게시입니다. `observe`와 `skip`에서는 공개 검증이 끝난 배포의 입력 해시와 배포·버전 ID를 Actions 아티팩트에 7일 동안 보관합니다. 과목 알림을 받으면 다섯 과목의 고정 체크아웃을 검사한 뒤 이 기록을 현재 운영 Worker와 대조합니다. 입력이나 운영 상태가 달라졌거나 기록을 확인할 수 없으면 전체 검증 및 게시를 진행합니다. 허브 푸시, 과목 지정 없는 수동 실행, 토큰 갱신 후 실행, `verify` 실행, Actions 재실행에는 각 실행의 전체 검증 절차를 적용합니다.
+
+1. 변수를 `observe`로 설정하고 전체 공개 배포를 한 번 성공시켜 비교에 쓸 기록을 만듭니다. 실행 요약에서 `published-public-verified`와 `public-checkpoint-<시도 번호>` 아티팩트를 확인합니다.
+2. 동일한 입력으로 과목 알림을 한 번 보내고, 기존 수집 범위 밖 파일의 본문만 수정한 뒤 다시 알립니다. 두 실행의 요약에서 `게시 입력 일치 · 빌드 번들 일치`를 확인합니다.
+3. 수집 대상 자료를 수정한 알림은 판정에서 불일치하고 전체 검증과 공개 게시가 완료되는지 확인합니다. 입력은 같은데 번들이 다르거나 예상과 다른 판정이 나오면 원인을 확인한 뒤 `skip`을 켭니다.
+4. `skip`에서 동일 입력 알림은 `게시 입력 동일 · 기존 운영 버전 확인`으로 끝나고 Worker 배포 ID가 그대로인지 확인합니다. 자료를 바꾼 알림에서는 새 배포 ID와 `published-public-verified`를 확인합니다. 두 실행의 경과 시간은 Actions 작업에서 확인합니다.
+
+생략을 끄려면 `STUDY_HUB_UNCHANGED_DEPLOYMENTS`를 지웁니다.
 
 ## Cloudflare 배포 토큰 갱신
 

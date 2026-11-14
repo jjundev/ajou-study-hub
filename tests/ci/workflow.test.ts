@@ -18,12 +18,13 @@ test('default_disabled_has_no_early_cloud_credentials and serializes production 
  expect(job['timeout-minutes']).toBe(60);
  expect(job.env).toBeUndefined();
  expect(JSON.stringify(workflow)).not.toMatch(/STUDY_HUB_LEDGER|deploy:private|deploy:bootstrap/);
- const publish=job.steps.at(-1);expect(publish.id).toBe('publish');expect(publish.if).toBe("${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' }}");
- for(const step of job.steps.slice(0,-1))expect(JSON.stringify(step)).not.toContain('CLOUDFLARE');
+ const publish=job.steps.find((s:any)=>s.id==='publish');expect(publish.if).toContain("vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled'");
  const steps=job.steps;
  expect(steps.filter((s:any)=>s.uses).every((s:any)=>/@[a-f0-9]{40}$/.test(s.uses))).toBe(true);
  expect(steps.find((s:any)=>s.id==='reader').with['permission-contents']).toBe('read');
  expect(steps.find((s:any)=>s.id==='summary-upload').with).toMatchObject({path:'app/ci-summary.json','retention-days':7});
+ expect(steps.find((s:any)=>s.id==='summary-upload').with.name)
+  .toContain("format('verify-metadata-{0}', github.run_attempt)");
 });
 test('app and five sources use fixed SHA refs without persisted credentials',async()=>{
  const workflow=await load(),steps=workflow.jobs.verify.steps;
@@ -34,7 +35,7 @@ test('app and five sources use fixed SHA refs without persisted credentials',asy
  for(const step of checkouts.slice(1)){expect(step.with.ref).toMatch(/^\$\{\{ steps\.revisions\.outputs\.[a-z_0-9]+ \}\}$/);expect(step.with.path).toMatch(/^sources\//);}
  const revoke=steps.findIndex((s:any)=>s.id==='revoke-reader'),browser=steps.findIndex((s:any)=>s.id==='browsers');
  expect(revoke).toBeGreaterThan(steps.indexOf(checkouts.at(-1)));expect(browser).toBeGreaterThan(revoke);
- for(const step of steps.slice(revoke+1)){expect(JSON.stringify(step.env??{})).not.toMatch(/reader\.outputs\.token|LEDGER/);if(step.id!=='publish')expect(JSON.stringify(step.env??{})).not.toContain('secrets.');}
+ for(const step of steps.slice(revoke+1)){expect(JSON.stringify(step.env??{})).not.toMatch(/reader\.outputs\.token|LEDGER/);if(!['compare-public-inputs','publish'].includes(step.id))expect(JSON.stringify(step.env??{})).not.toContain('secrets.');}
 });
 
 test('sources use trusted generated exact non-cone selection and bounded checks before binding',async()=>{
@@ -170,8 +171,13 @@ test('status metadata hydration uses scoped Reader before unconditional revocati
 });
 
 
-test('only final publication receives Cloudflare credentials, after browser/server boundary',async()=>{
- const steps=(await load()).jobs.verify.steps,publish=steps.at(-1),boundary=steps.findIndex((s:any)=>s.id==='boundary');
+test('secrets and receipt handling remain bound to their steps',async()=>{
+ const steps=(await load()).jobs.verify.steps,publish=steps.find((s:any)=>s.id==='publish'),boundary=steps.findIndex((s:any)=>s.id==='boundary');
+ expect(steps.filter((s:any)=>s.env?.CLOUDFLARE_API_TOKEN).map((s:any)=>s.id)).toEqual(['publish']);
+ expect(steps.filter((s:any)=>s.env?.CLOUDFLARE_READ_TOKEN).map((s:any)=>s.id)).toEqual(['compare-public-inputs','publish']);
+ const compare=steps.find((s:any)=>s.id==='compare-public-inputs');
+ expect(steps.indexOf(compare)).toBeGreaterThan(steps.findIndex((s:any)=>s.id==='source-limits'));
+ expect(compare.env.GH_TOKEN).toBe('${{ github.token }}');
  expect(boundary).toBeGreaterThan(steps.findIndex((s:any)=>s.name==='Build and verify the same pinned material checkout'));
  expect(steps.indexOf(publish)).toBeGreaterThan(boundary);
  expect(publish.env).toEqual({STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS:'${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}',CLOUDFLARE_API_TOKEN:'${{ secrets.CLOUDFLARE_API_TOKEN }}',CLOUDFLARE_READ_TOKEN:'${{ secrets.CLOUDFLARE_READ_TOKEN }}'});
@@ -179,11 +185,86 @@ test('only final publication receives Cloudflare credentials, after browser/serv
  expect(publish.run).toContain("writeFile('.local/public-deployment.json'");
  expect(publish.run).toContain('npm run deploy:public');expect(publish.run).not.toMatch(/playwright|chromium|wrangler|deploy:private|deploy:automatic|ledger/i);
  expect(publish.run).not.toMatch(/\$\{\{/);expect(publish.run).toContain("{flag:'wx',mode:0o600}");
+ const record=steps.find((s:any)=>s.id==='record-public-checkpoint');
+ const upload=steps.find((s:any)=>s.id==='upload-public-checkpoint');
+ expect(steps.indexOf(record)).toBeGreaterThan(steps.indexOf(publish));
+ expect(steps.indexOf(upload)).toBeGreaterThan(steps.indexOf(record));
+ expect(record.if).toContain("steps.publish.outcome == 'success'");
+ expect(upload.if).toContain("steps.record-public-checkpoint.outcome == 'success'");
+ expect(upload.with).toEqual({name:'public-checkpoint-${{ github.run_attempt }}',path:'app/.reports/public-checkpoint.json',
+  'retention-days':7,'if-no-files-found':'error','include-hidden-files':false});
+});
+
+test('only eligible course updates may skip expensive steps', async () => {
+ const steps = (await load()).jobs.verify.steps;
+ const names = [
+  'Install trusted application dependencies', 'Install three browsers', 'Typecheck and synthetic tests',
+  'Probe process metadata after synthetic browsers before material build', 'Build and verify the same pinned material checkout',
+  'Emit bounded metadata only', 'Upload safe metadata only', 'Publish the verified bundle to the public Worker',
+ ];
+ const course = 'jjundev/ajou-jagual';
+ const scenarios = [
+  { name:'matched course update', compare:true, skip:true },
+  { name:'hub push', event:'push', compare:false, skip:false },
+  { name:'regular manual or token rotation', source:'', compare:false, skip:false },
+  { name:'verify only', mode:'verify', published:false, compare:false, skip:false },
+  { name:'updates disabled', enabled:'disabled', published:false, compare:false, skip:false },
+  { name:'observe mode', policy:'observe', compare:true, skip:false },
+  { name:'default mode', policy:'', compare:false, skip:false },
+  { name:'input mismatch', match:'false', compare:true, skip:false },
+  { name:'fingerprint failure', fingerprintFailed:true, compare:false, skip:false },
+  { name:'comparison failure', comparisonFailed:true, compare:true, skip:false },
+  { name:'Reader or source validation failed', success:false, published:false, compare:false, skip:false },
+  { name:'trusted boundary failed after match', boundaryFailed:true, published:false, compare:true, skip:true },
+ ];
+ for (const row of scenarios) {
+  let success = row.success ?? true;
+  const vars = { STUDY_HUB_AUTOMATIC_UPDATES:row.enabled ?? 'enabled', STUDY_HUB_UNCHANGED_DEPLOYMENTS:row.policy ?? 'skip' };
+  const inputs = { mode:row.mode ?? 'default', source_repository:row.source ?? course };
+  const github = { event_name:row.event ?? 'workflow_dispatch' };
+  const known: Record<string,{outputs:Record<string,string>;outcome?:string}> = {};
+  const outcomes = new Map();
+  for (const step of steps) {
+   let run = success;
+   if (step.if) {
+    const expr = step.if.trim().slice(3,-2)
+     .replace(/steps\.([a-z-]+)(?:\.outputs)?\.([a-z_]+)/g, (_:string, id:string, key:string) =>
+      JSON.stringify(known[id]?.outputs[key] ?? (key==='outcome' ? known[id]?.outcome : undefined) ?? ''));
+    run = (expr.includes('always()') || success) && new Function('success','always','vars','inputs','github',
+     'return ('+expr+')')(() => success,() => true,vars,inputs,github);
+   }
+   outcomes.set(step.id ?? step.name, run);
+   if (step.id) known[step.id] = {outcome:run ? 'success' : 'skipped',outputs:{}};
+   if (run && step.id==='fingerprint-public-inputs') {
+    known[step.id]!.outcome=row.fingerprintFailed ? 'failure' : 'success';
+    known[step.id]!.outputs={input_hash:'f'.repeat(64),policy:vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS};
+   }
+   if (run && step.id==='compare-public-inputs') {
+    known[step.id]!.outcome=row.comparisonFailed ? 'failure' : 'success';
+    known[step.id]!.outputs.match=row.match ?? 'true';
+   }
+   if (run && step.id==='skip-public-deployment') known[step.id]!.outputs.skip='true';
+   if (run && step.id==='boundary' && row.boundaryFailed) {
+    known[step.id]!.outcome='failure';
+    success=false;
+   }
+  }
+  expect(outcomes.get('compare-public-inputs'),row.name).toBe(row.compare);
+  expect(outcomes.get('skip-public-deployment'),row.name).toBe(row.skip);
+  expect(outcomes.get('boundary'),row.name).toBe(row.success ?? true);
+  expect(outcomes.get('Report the verified unchanged deployment'),row.name).toBe(row.skip && !row.boundaryFailed);
+  for (const name of names) {
+   const step=steps.find((candidate:any)=>candidate.name===name);
+   expect(step,row.name).toBeDefined();
+   expect(outcomes.get(step.id ?? name),row.name)
+    .toBe((row.success ?? true) && !row.skip && (step.id!=='publish' || (row.published ?? true)));
+  }
+ }
 });
 
 
 test('publication summary exports only bounded allowlisted outcomes and fails on an invalid receipt',async()=>{
- const publish=(await load()).jobs.verify.steps.at(-1),script=publish.run.split("node --input-type=module <<'NODE'\n")[1].split('\nNODE')[0];
+ const publish=(await load()).jobs.verify.steps.find((s:any)=>s.id==='publish'),script=publish.run.split("node --input-type=module <<'NODE'\n")[1].split('\nNODE')[0];
  const root=await mkdtemp(join(tmpdir(),'hub-publication-summary-')),summary=join(root,'summary');
  try{
   await mkdir(join(root,'.reports'));
@@ -193,14 +274,21 @@ test('publication summary exports only bounded allowlisted outcomes and fails on
   expect(JSON.parse(result.stdout)).toMatchObject({status:value.status,bundleHash:value.bundleHash});expect(result.stderr).toBe('');
   const text=await readFile(summary,'utf8');expect(text).toContain('upload-started-outcome-unknown');expect(text).not.toContain('acceptanceComplete');expect(text).not.toMatch(/canary|privatePath|token/);
   const active = '22222222-2222-2222-2222-222222222222';
+  const deploymentId = '33333333-3333-3333-3333-333333333333';
   const catalogHash = 'c'.repeat(64);
   await writeFile(join(root,'.reports','public-release.json'),JSON.stringify({
-   ...value,status:'published-public-verified',versionId:active,currentVersionId:active,checked:1307,catalogHash,
+   ...value,status:'published-public-verified',versionId:active,currentVersionId:active,checked:1307,catalogHash,deploymentId,
   }));
   await exec(process.execPath,['--input-type=module','--eval',script],{cwd:root,env:{...process.env,GITHUB_STEP_SUMMARY:summary},timeout:30000});
   const published = await readFile(summary,'utf8');
   expect(published).toContain('"checked":1307');
   expect(published).toContain(catalogHash);
+  expect(published).toContain(deploymentId);
+  await writeFile(join(root,'.reports','public-release.json'),JSON.stringify({
+   ...value,status:'published-public-verified',versionId:active,currentVersionId:active,checked:1307,catalogHash,
+  }));
+  await expect(exec(process.execPath,['--input-type=module','--eval',script],{cwd:root,env:{...process.env,GITHUB_STEP_SUMMARY:summary},timeout:30000}))
+   .rejects.toMatchObject({code:1,stderr:'CI_PUBLICATION_RECEIPT_UNAVAILABLE_INSPECT_CURRENT_TARGET\n'});
   await writeFile(join(root,'.reports','public-release.json'),JSON.stringify({...value,versionId:'private-canary'}));
   const invalid=await exec(process.execPath,['--input-type=module','--eval',script],{cwd:root,env:{...process.env,GITHUB_STEP_SUMMARY:summary},timeout:30000}).then(()=>({code:0,stderr:''}),error=>({code:error.code,stderr:error.stderr}));
   expect(invalid).toEqual({code:1,stderr:'CI_PUBLICATION_RECEIPT_UNAVAILABLE_INSPECT_CURRENT_TARGET\n'});

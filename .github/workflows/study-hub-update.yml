@@ -183,12 +183,48 @@ jobs:
         run: |
           node --import tsx tools/ci/source-limits.ts
           node --import tsx tools/ci/sources-cli.ts bind "$GITHUB_SHA" .local/revisions.json > /dev/null || { echo CI_BIND_FAILED; exit 1; }
+      - name: Fingerprint the pinned public inputs
+        id: fingerprint-public-inputs
+        if: >-
+          ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
+              (vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'observe' || vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'skip') }}
+        continue-on-error: true
+        env:
+          AUTOMATIC_UPDATES: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES }}
+          UNCHANGED_DEPLOYMENTS: ${{ vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS }}
+        run: |
+          if [[ "$AUTOMATIC_UPDATES" != enabled || ( "$UNCHANGED_DEPLOYMENTS" != observe && "$UNCHANGED_DEPLOYMENTS" != skip ) ]]; then exit 0; fi
+          hash="$(node --import tsx tools/ci/public-input-fingerprint.ts)"
+          if [[ ! "$hash" =~ ^[0-9a-f]{64}$ ]]; then echo CI_PUBLIC_INPUT_UNAVAILABLE; exit 1; fi
+          (umask 077; set -o noclobber; printf '%s\n' "$hash" > "$RUNNER_TEMP/study-hub-public-input.sha256")
+          printf 'input_hash=%s\npolicy=%s\n' "$hash" "$UNCHANGED_DEPLOYMENTS" >> "$GITHUB_OUTPUT"
+      - name: Compare with the active verified public deployment
+        id: compare-public-inputs
+        if: >-
+          ${{ github.event_name == 'workflow_dispatch' && inputs.source_repository != '' &&
+              steps.fingerprint-public-inputs.outcome == 'success' &&
+              steps.fingerprint-public-inputs.outputs.input_hash != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+          STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
+        run: node --import tsx tools/ci/public-deployment-checkpoint.ts compare
+      - name: Skip a verified unchanged course deployment
+        id: skip-public-deployment
+        if: >-
+          ${{ success() && steps.fingerprint-public-inputs.outputs.policy == 'skip' &&
+              steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.match == 'true' }}
+        run: echo 'skip=true' >> "$GITHUB_OUTPUT"
       - name: Install trusted application dependencies
+        if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         run: npm ci --no-audit --no-fund > /dev/null 2>&1 || { echo CI_INSTALL_FAILED; exit 1; }
       - name: Install three browsers
         id: browsers
+        if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         run: npx playwright install --with-deps chromium firefox webkit > /dev/null 2>&1 || { echo CI_BROWSER_INSTALL_FAILED; exit 1; }
       - name: Typecheck and synthetic tests
+        if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         run: |
           npm run typecheck > /dev/null 2>&1 || { echo CI_TYPECHECK_FAILED; exit 1; }
           npm test -- --maxWorkers=1 > /dev/null 2>&1 || { echo CI_UNIT_FAILED; exit 1; }
@@ -196,8 +232,10 @@ jobs:
           npm run test:e2e -- --reporter=line || { echo CI_E2E_FAILED; exit 1; }
       - name: Probe process metadata after synthetic browsers before material build
         id: post-test-process-probe
+        if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         run: node tools/ci/process-boundary.ts probe-processes "$RUNNER_TEMP/study-hub-trusted.json"
       - name: Build and verify the same pinned material checkout
+        if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         run: |
           npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }
           verify_material() {
@@ -241,6 +279,26 @@ jobs:
           NODE
             exit 1
           fi
+      - name: Compare the observed match with the actual built bundle
+        if: >-
+          ${{ steps.fingerprint-public-inputs.outputs.policy == 'observe' &&
+              steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.match == 'true' }}
+        continue-on-error: true
+        env:
+          PREVIOUS_BUNDLE_HASH: ${{ steps.compare-public-inputs.outputs.bundle_hash }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFile, readFile } from 'node:fs/promises';
+          let summary = '게시 입력 일치 · 빌드 번들 확인 불가';
+          try {
+            const { bundleHash } = JSON.parse(await readFile('.reports/app-build.json', 'utf8'));
+            if (typeof bundleHash !== 'string' || !/^[a-f0-9]{64}$/.test(bundleHash)) throw Error();
+            summary = bundleHash === process.env.PREVIOUS_BUNDLE_HASH
+              ? '게시 입력 일치 · 빌드 번들 일치'
+              : '게시 입력 일치 · 빌드 번들 불일치';
+          } catch {}
+          await appendFile(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
+          NODE
       - name: Detect surviving processes and trusted checkout changes
         id: boundary
         run: |
@@ -257,7 +315,11 @@ jobs:
             }
           } catch {console.error('BOUNDARY_SOURCE_CREDENTIAL_CONFIG');process.exitCode=1;}
           NODE
+      - name: Report the verified unchanged deployment
+        if: ${{ steps.skip-public-deployment.outputs.skip == 'true' && steps.boundary.outcome == 'success' }}
+        run: echo '게시 입력 동일 · 기존 운영 버전 확인' >> "$GITHUB_STEP_SUMMARY"
       - name: Emit bounded metadata only
+        if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         run: |
           node --input-type=module <<'NODE'
           import {readFile,writeFile} from 'node:fs/promises';
@@ -276,16 +338,19 @@ jobs:
           NODE
       - name: Upload safe metadata only
         id: summary-upload
+        if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: verify-metadata
+          name: ${{ github.run_attempt == 1 && 'verify-metadata' || format('verify-metadata-{0}', github.run_attempt) }}
           path: app/ci-summary.json
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: false
       - name: Publish the verified bundle to the public Worker
         id: publish
-        if: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' }}
+        if: >-
+          ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
+              steps.skip-public-deployment.outputs.skip != 'true' }}
         env:
           STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -325,7 +390,7 @@ jobs:
             if (!statuses.includes(receipt.status)) throw Error();
             const sha256 = /^[a-f0-9]{64}$/;
             const safe = { status: receipt.status };
-            for (const key of ['versionId', 'currentVersionId', 'previousVersionId']) {
+            for (const key of ['versionId', 'currentVersionId', 'previousVersionId', 'deploymentId']) {
               if (receipt[key] === undefined) continue;
               if (typeof receipt[key] !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receipt[key]))
                 throw Error();
@@ -335,7 +400,7 @@ jobs:
               throw Error();
             safe.bundleHash = receipt.bundleHash;
             if (receipt.status === 'published-public-verified') {
-              if (!safe.versionId || safe.currentVersionId !== safe.versionId ||
+              if (!safe.deploymentId || !safe.versionId || safe.currentVersionId !== safe.versionId ||
                   !Number.isSafeInteger(receipt.checked) || receipt.checked < 3 || receipt.checked > 20000 ||
                   typeof receipt.catalogHash !== 'string' || !sha256.test(receipt.catalogHash)) throw Error();
               safe.checked = receipt.checked;
@@ -350,3 +415,31 @@ jobs:
           }
           NODE
           if [ "$publication_status" -ne 0 ]; then echo CI_AUTOMATIC_PUBLICATION_FAILED_INSPECT_CURRENT_TARGET; exit 1; fi
+      - name: Record the verified public deployment checkpoint
+        id: record-public-checkpoint
+        if: >-
+          ${{ steps.publish.outcome == 'success' && steps.fingerprint-public-inputs.outcome == 'success' &&
+              steps.fingerprint-public-inputs.outputs.input_hash != '' }}
+        continue-on-error: true
+        env:
+          STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
+          EXPECTED_PUBLIC_INPUT_HASH: ${{ steps.fingerprint-public-inputs.outputs.input_hash }}
+        run: node --import tsx tools/ci/public-deployment-checkpoint.ts record
+      - name: Upload the public deployment checkpoint
+        id: upload-public-checkpoint
+        if: ${{ steps.record-public-checkpoint.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: public-checkpoint-${{ github.run_attempt }}
+          path: app/.reports/public-checkpoint.json
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: false
+      - name: Confirm the public deployment checkpoint was saved
+        if: ${{ steps.upload-public-checkpoint.outcome == 'success' }}
+        run: echo CI_PUBLIC_CHECKPOINT_SAVED
+      - name: Report unavailable public deployment checkpoint
+        if: >-
+          ${{ steps.record-public-checkpoint.outcome == 'failure' || steps.upload-public-checkpoint.outcome == 'failure' }}
+        run: echo '::warning::CI_PUBLIC_CHECKPOINT_NOT_SAVED'
