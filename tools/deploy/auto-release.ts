@@ -9,15 +9,16 @@ import { readAccessInspection, type AccessInspection } from './access-policy.js'
 import { withSealedArtifact } from './release-artifact.js';
 import { runWranglerUpload } from './wrangler-upload.js';
 import { assertRuntimeFresh } from './release-proof.js';
-import { representativePaths } from '../representatives.js';
+import type { Catalog } from '../../src/content/model.js';
+import { representativePaths, resolveReviewDownloads, reviewDownloadUrl } from '../representative-materials.js';
 
 /** No browser, API credential, cookie jar, automatic redirect, or raw response logging. */
-async function anonymousBlocked(settings:DeploymentSettings,inspection:AccessInspection,directory:string):Promise<void>{
- const catalog=JSON.parse(await readFile(resolve(directory,'catalog.json'),'utf8'));
+async function anonymousBlocked(settings:DeploymentSettings,inspection:AccessInspection,directory:string,manifest:BuildReport):Promise<void>{
+ const catalog:Catalog=JSON.parse(await readFile(resolve(directory,'catalog.json'),'utf8'));
  const paths=['catalog.json',...representativePaths.map(([courseId,sourcePath])=>{
-  const doc=catalog.documents.find((d:any)=>d.courseId===courseId&&d.sourcePath===sourcePath);
-  if(!doc)throw Error('Missing protected representative');return doc.url.slice(1) as string;
- })];
+  const doc=catalog.documents.find(d=>d.courseId===courseId&&d.sourcePath===sourcePath);
+  if(!doc)throw Error('Missing protected representative');return doc.url.slice(1);
+ }),...resolveReviewDownloads(catalog,manifest.outputs).downloads.map(file=>reviewDownloadUrl(file.path).slice(1))];
  const request={get:async(url:string)=>{
   const response=await fetch(url,{redirect:'manual',credentials:'omit',signal:AbortSignal.timeout(30000)});
   const reader=response.body?.getReader();let size=0;const chunks:Uint8Array[]=[];
@@ -40,7 +41,7 @@ export async function releaseAutomatic(settings:DeploymentSettings,baseline:Auto
   if(settingsFingerprint(configured)!==settingsFingerprint(settings))throw Error('Deployment settings changed');
  };
  let current:AccessInspection,manifest!:BuildReport,proof!:{createdAt:string};
- const authorize=async()=>{await local();if(!manifest){manifest=JSON.parse(await readFile(resolve(root,'.reports/app-build.json'),'utf8'));proof=JSON.parse(await readFile(resolve(root,'.reports/verification.json'),'utf8'));}current=await readAccessInspection(settings);assertAutomationAllowed(settings,current,baseline);await anonymousBlocked(settings,current,dist);};
+ const authorize=async()=>{await local();if(!manifest){manifest=JSON.parse(await readFile(resolve(root,'.reports/app-build.json'),'utf8'));proof=JSON.parse(await readFile(resolve(root,'.reports/verification.json'),'utf8'));}current=await readAccessInspection(settings);assertAutomationAllowed(settings,current,baseline);await anonymousBlocked(settings,current,dist,manifest);};
  await writeReport({status:'prepared-not-uploaded',acceptanceComplete:false},receiptPath,[dist],root);
  return withSealedArtifact(root,authorize,async(directory,configPath)=>{
   await local();assertAutomationAllowed(settings,current!,baseline);
@@ -53,7 +54,7 @@ export async function releaseAutomatic(settings:DeploymentSettings,baseline:Auto
   const active=await readAccessInspection(settings);assertAutomationAllowed(settings,active,baseline);
   await writeReport({status:'uploaded-postcheck-pending',versionId:receipt.versionId,currentVersionId:active.versionId,bundleHash:manifest.bundleHash,acceptanceComplete:false},receiptPath,[dist,directory],root);
   await local();if(active.versionId!==receipt.versionId)throw Error('Active version mismatch');
-  await anonymousBlocked(settings,active,directory);
+  await anonymousBlocked(settings,active,directory,manifest);
   await writeReport({status:'published-protection-verified',versionId:receipt.versionId,bundleHash:manifest.bundleHash,acceptanceComplete:false},receiptPath,[dist,directory],root);
   return {...receipt,bundleHash:manifest.bundleHash};
  });

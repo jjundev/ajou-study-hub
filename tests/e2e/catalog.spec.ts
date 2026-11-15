@@ -101,7 +101,7 @@ test('downloads review sheets and answers without leaving the lesson list', asyn
   await expect(review).toHaveCount(0);
   await expect(pdf).toBeVisible();
   await expect(answer).toBeVisible();
-  await search.fill('논리회로실험');
+  await search.fill('생명과학');
   await expect(pdf).toHaveCount(0);
   await expect(answer).toHaveCount(0);
 });

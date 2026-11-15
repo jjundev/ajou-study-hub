@@ -279,6 +279,7 @@ export async function verifyActual(
     const representatives = await verifyRepresentatives(
       server.baseUrl,
       catalog,
+      manifest.outputs,
       log,
     );
     observations.push(...representatives.observations);

@@ -5,7 +5,10 @@ import type { BuildReport } from '../content/report.js';
 import { matchingException, checkBundle, bundleLimits } from '../content/preflight.js';
 import { runtimeIssue, type RuntimeException } from '../runtime-exceptions.js';
 import { auditWorkbookFigures } from '../runtime-workbooks.js';
-import { representativePaths } from '../representatives.js';
+import {
+ representativePaths, representativeBrowserNames, representativeWidths, representativeScenarioCount,
+ resolveReviewDownloads, reviewDownloadCase,
+} from '../representative-materials.js';
 import type { Observation } from '../verify-content.js';
 import type { Issue } from '../../src/content/model.js';
 import { selectCourseRelease, type CourseRelease } from '../course-release.js';
@@ -66,13 +69,23 @@ export async function assertReleaseProof(root:string,directory:string,manifest:B
   if(!item.responses.some((r:any)=>{try{return r.status===200&&decodeURIComponent(new URL(r.url).pathname)===decodeURIComponent(doc!.url);}catch{return false;}}))fail();
  }
  const reps=proof.representatives;
- if(!reps||reps.complete!==true||!Array.isArray(reps.scenarios)||reps.scenarios.length!==representativePaths.length*6||!Array.isArray(reps.observations)||reps.observations.length)fail();
- for(const [courseId,sourcePath] of representativePaths){
-  const doc=catalog.documents.find(d=>d.courseId===courseId&&d.sourcePath===sourcePath);if(!doc)fail();
-  for(const browser of ['chromium','firefox','webkit'])for(const width of [390,1440]){
-   const matches=reps.scenarios.filter((s:any)=>s.documentId===doc!.id&&s.browser===browser&&s.width===width);
-   if(matches.length!==1||matches[0].passed!==true||matches[0].error||!Array.isArray(matches[0].checks)||!matches[0].checks.length)fail();
+ if(!reps||reps.complete!==true||!Array.isArray(reps.scenarios)||reps.scenarios.length!==representativeScenarioCount||!Array.isArray(reps.observations)||reps.observations.length)fail();
+ const representativeDocuments = representativePaths.map(([courseId,sourcePath]) => {
+  const doc = catalog.documents.find(d => d.courseId === courseId && d.sourcePath === sourcePath);
+  return doc ?? fail();
+ });
+ const { downloads } = resolveReviewDownloads(catalog, manifest.outputs);
+ for (const browser of representativeBrowserNames) for (const width of representativeWidths) {
+  const rows = reps.scenarios.filter((s:any) => s?.browser === browser && s.width === width);
+  function requirePassed(matches:any[]) {
+   const row = matches[0];
+   if(matches.length!==1||row.passed!==true||row.error||!Array.isArray(row.checks)||!row.checks.length)fail();
+   return row;
   }
+  for (const doc of representativeDocuments)
+   requirePassed(rows.filter((s:any) => s.documentId === doc.id && s.caseId === undefined));
+  const downloadRow = requirePassed(rows.filter((s:any) => s.caseId === reviewDownloadCase.id && s.documentId === undefined));
+  if (!same(downloadRow.downloads, downloads)) fail();
  }
  const dynamic=await auditWorkbookFigures(catalog.documents,async(courseId,path)=>readFile(resolve(directory,'content',courseId,path)),manifest.outputs.map(f=>f.path));
  if(!same(dynamic,proof.dynamicAssets))fail();

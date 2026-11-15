@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Catalog } from '../../src/content/model.js';
 import { verifyActual } from '../verify-actual.js';
+import { representativeScenarioCount } from '../representative-materials.js';
 import { verifierProject } from '../verification-project.js';
 
 type ObservedProof = Pick<Awaited<ReturnType<typeof verifyActual>>,
@@ -29,7 +30,7 @@ export function summarizeCourseObservation(
     return report.status === 'complete' && report.passed === true &&
       integrity.sourceHashesUnchanged === true && integrity.bundleBytesUnchanged === true &&
       integrity.sourceTrackingUnchanged === true && report.representatives.complete === true &&
-      report.representatives.scenarios.length === 42 && report.representatives.scenarios.every(row => row.passed === true) &&
+      report.representatives.scenarios.length === representativeScenarioCount && report.representatives.scenarios.every(row => row.passed === true) &&
       [report.durationMs, report.documentScanMs, integrity.inputCount, integrity.outputCount]
         .every(value => Number.isSafeInteger(value) && value >= 0) && report.documentScanMs <= report.durationMs;
   };

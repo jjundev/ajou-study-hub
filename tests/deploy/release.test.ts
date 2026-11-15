@@ -6,7 +6,6 @@ import { releasePrivate, parseUploadReceipt } from '../../tools/deploy/release.j
 import { inventory } from '../../tools/deploy/bootstrap.js';
 import { settingsFingerprint, type AccessSnapshot } from '../../tools/deploy/access.js';
 import { sentinelPaths } from '../../tools/deploy/guard.js';
-import { representativePaths } from '../../tools/representatives.js';
 import { execFileSync } from 'node:child_process';
 import { courses } from '../../config/courses.js';
 import { inspectBoundSources } from '../../tools/source-binding.js';
@@ -14,6 +13,23 @@ import { assertReleaseProof } from '../../tools/deploy/release-proof.js';
 import { fixture, settings } from './release-fixture.js';
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 describe('guarded private release (synthetic only)',()=>{
+ it('accepts verified experiment PDFs after the former representative HTML is deleted',async()=>{
+  const f=await fixture();
+  await expect(assertReleaseProof(f.root,f.options.distDir,f.manifest,f.proof)).resolves.toBeUndefined();
+ });
+ it.each(['missing','wrong-hash','swapped','duplicate-scenario'])('rejects %s experiment download evidence',async kind=>{
+  const f=await fixture();
+  const scenarios=f.proof.representatives.scenarios;
+  const row=scenarios.find((scenario:any)=>scenario.caseId==='logic-lab-experiment-01-downloads');
+  if(kind==='missing')row.downloads.pop();
+  if(kind==='wrong-hash')row.downloads[0].sha256='a'.repeat(64);
+  if(kind==='swapped'){
+   const [review,answer]=row.downloads;
+   row.downloads=[{...answer,kind:'review'},{...review,kind:'answer'}];
+  }
+  if(kind==='duplicate-scenario')scenarios[scenarios.length-1]=structuredClone(row);
+  await expect(assertReleaseProof(f.root,f.options.distDir,f.manifest,f.proof)).rejects.toThrow();
+ });
  it('accepts captured informational external references and separately checks the exact runtime font exception',async()=>{
   const f=await fixture();
   const external={code:'external-reference',courseId:'logic-lab',sourcePath:f.sourcePath,target:'https://cdn.example.test/library.js',reason:'External dependency (not collected)',severity:'warning'};

@@ -109,7 +109,7 @@ async function releaseFixture() {
   await f.put('dist/index.html', html);
   await f.put('dist/404.html', '<h1>Missing</h1>');
   const existingCatalog = JSON.parse(await readFile(resolve(f.root, 'dist/catalog.json'), 'utf8'));
-  await f.put('dist/catalog.json', { ...existingCatalog, version: 1, courses: [], groups: [] });
+  await f.put('dist/catalog.json', { ...existingCatalog, version: 1, courses: [] });
   const outputs = await inventory(resolve(f.root, 'dist'));
   const bundleHash = hash(outputs.map(row => `${row.path}\0${row.sha256}\n`).join(''));
   await f.put('.reports/app-build.json', { ...f.manifest, outputs, bundleHash });
@@ -134,7 +134,7 @@ async function releaseFixture() {
     if (active === previous || path === '') return preflight.request(input, init);
     const row = outputs.find(row => row.path === path);
     const bytes = await readFile(resolve(f.root, 'dist', row?.path ?? '404.html'));
-    const type = fixtures[path]?.type ?? 'text/html';
+    const type = fixtures[path]?.type ?? (path.endsWith('.pdf') ? 'application/pdf' : 'text/html');
     return new Response(new Uint8Array(bytes), { status: row ? 200 : 404, headers: { 'content-type': type } });
   }) satisfies typeof fetch);
   return {

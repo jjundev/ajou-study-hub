@@ -277,9 +277,12 @@ jobs:
               if (/^(?:net::ERR_(?:CONNECTION_[A-Z_]+|NAME_NOT_RESOLVED|TIMED_OUT|CERT_[A-Z_]+)|NS_ERROR_[A-Z_]+)$/.test(reason)) return 'network';
               return 'other';
             }))];
+            const reviewErrors=new Set(['REVIEW_PDF_GROUP_UNAVAILABLE','REVIEW_PDF_MISSING','ANSWER_PDF_MISSING',
+              'REVIEW_PDF_INVALID_ASSET','REVIEW_PDF_BYTES_MISMATCH','REVIEW_PDF_DOWNLOAD_FAILED']);
             const scenarios=report.representatives.scenarios
               .filter(row=>row.passed===false && ['chromium','firefox','webkit'].includes(row.browser) && [390,1440].includes(row.width))
-              .map(({browser,width})=>({browser,width}));
+              .map(({browser,width,caseId,error})=>caseId==='logic-lab-experiment-01-downloads' && reviewErrors.has(error)
+                ? {browser,width,caseId,error} : {browser,width});
             console.error(JSON.stringify({code:'CI_CONTENT_FAILED',errors:errors.length,kinds:codes,causes,scenarios}));
           } catch { console.error('CI_CONTENT_FAILED: verification report unavailable'); }
           NODE

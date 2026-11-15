@@ -5,11 +5,17 @@ import {
   expect,
   type Page,
 } from "@playwright/test";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { formatRoute } from "../src/app/router.js";
 import type { Catalog } from "../src/content/model.js";
 import { storageNamespace } from "./content/transform.js";
 import type { Observation } from "./verify-content.js";
 import { waitForSettledRequests, type RequestSettlement } from "./runtime-readiness.js";
+import {
+  representativePaths, representativeBrowserNames, representativeWidths, representativeScenarioCount,
+  resolveReviewDownloads, reviewDownloadCase, reviewDownloadUrl, ReviewDownloadError,
+} from "./representative-materials.js";
 export function trackRepresentativeRequests(page: Page) {
   const state: RequestSettlement = { pending: new Map(), lastActivity: Date.now() };
   page.on("request", request => {
@@ -68,15 +74,6 @@ export async function confirmCancelledCdnRequest(
 }
 
 
-export const representativePaths = [
-  ["life-science", "복습노트/0901/복습문제_0901_Biomolecules_and_Cells.html"],
-  ["data-structures", "복습노트/1012/정리노트_1012_Queue.html"],
-  ["ml-basics", "복습노트/1012/정리노트_1012_Several_Mathematical_Proofs.html"],
-  ["ml-basics", "복습노트/1014/인터렉티브_01_사전분포와_사후분포.html"],
-  ["logic-lab", "복습노트/실험01/실험01_문제설명.html"],
-  ["logic-lab", "복습노트/실험01/실험01_기출문제.html"],
-  ["circuits-2", "복습노트/0909/문제설명_0909_Cascode_Stage.html"],
-] as const;
 export async function pagerHistory(page: Page, settle = trackRepresentativeRequests(page)) {
   const current = () => page.locator(".screen.is-current").getAttribute("id");
   const routeAnchor = () => page.evaluate(() => decodeURIComponent(location.hash.slice(1)));
@@ -114,25 +111,53 @@ async function showPanel(page: Page, id: string) {
   await expect(page.locator('#panel-' + id)).toBeVisible();
 }
 
-export type Scenario = {
+type DownloadEvidence = ReturnType<typeof resolveReviewDownloads>["downloads"];
+type Scenario = {
   browser: string;
   width: number;
-  documentId: string;
   checks: string[];
   passed: boolean;
   error?: string;
-};
-export async function verifyRepresentatives(baseUrl: string, catalog: Catalog, log = console.log) {
+} & ({ documentId: string } | { caseId: typeof reviewDownloadCase.id; downloads: DownloadEvidence });
+
+export async function verifyReviewDownloads(
+  page: Page, baseUrl: string, catalog: Catalog, outputs: readonly { path: string; sha256: string }[],
+): Promise<DownloadEvidence> {
+  const { groupId, downloads } = resolveReviewDownloads(catalog, outputs);
+  const lessonUrl = baseUrl + "/" + formatRoute({ kind: "catalog", courseId: reviewDownloadCase.courseId, groupId });
+  await page.goto(lessonUrl, { timeout: 15000 });
+  const evidence: DownloadEvidence = [];
+  for (const { kind, path, sha256 } of downloads) {
+    const url = reviewDownloadUrl(path);
+    const filename = path.split("/").at(-1)!;
+    const roleName = kind === "review" ? "복습문제 PDF 다운로드" : "복습문제 해설지 PDF 다운로드";
+    const link = page.getByRole("link", { name: new RegExp(roleName + "$") })
+      .and(page.locator(`a[href="${url}"]`));
+    await expect(link).toHaveAttribute("download", filename);
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 15000 }),
+      link.click({ timeout: 15000 }),
+    ]);
+    const bytes = await readFile(await download.path());
+    const downloadedHash = createHash("sha256").update(bytes).digest("hex");
+    if (download.url() !== baseUrl + url || bytes.subarray(0, 5).toString() !== "%PDF-" || downloadedHash !== sha256)
+      throw new ReviewDownloadError("REVIEW_PDF_BYTES_MISMATCH");
+    evidence.push({ kind, path, sha256: downloadedHash });
+  }
+  await expect(page).toHaveURL(lessonUrl);
+  return evidence;
+}
+
+export async function verifyRepresentatives(
+  baseUrl: string, catalog: Catalog, outputs: readonly { path: string; sha256: string }[], log = console.log,
+) {
   const scenarios: Scenario[] = [];
   const observations: Observation[] = [];
-  for (const [browserName, engine] of Object.entries({
-    chromium,
-    firefox,
-    webkit,
-  })) {
-    const browser = await engine.launch();
+  const engines = { chromium, firefox, webkit };
+  for (const browserName of representativeBrowserNames) {
+    const browser = await engines[browserName].launch();
     try {
-      for (const width of [390, 1440]) {
+      for (const width of representativeWidths) {
         const context = await browser.newContext({
           viewport: { width, height: 900 },
         });
@@ -253,31 +278,7 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog, l
                 scenario.checks.push(
                   "malformed native object/array/null values do not prevent source UI",
                 );
-              if (sourcePath.includes("기출문제")) {
-                await expect(page.locator("html")).toHaveAttribute(
-                  "data-ready",
-                  "true",
-                  { timeout: 30000 },
-                );
-                await expect(page.locator("#book .page")).toHaveCount(12);
-                const imgs = page.locator("img");
-                expect(await imgs.count()).toBeGreaterThan(0);
-                for (let i = 0; i < (await imgs.count()); i++) {
-                  await imgs.nth(i).scrollIntoViewIfNeeded();
-                  await expect
-                    .poll(() =>
-                      imgs
-                        .nth(i)
-                        .evaluate(
-                          (el) => (el as HTMLImageElement).naturalWidth,
-                        ),
-                    )
-                    .toBeGreaterThan(0);
-                }
-                scenario.checks.push(
-                  "12 generated workbook pages and every generated image",
-                );
-              } else if (sourcePath.includes("인터렉티브")) {
+              if (sourcePath.includes("인터렉티브")) {
                 await expect(page.locator("canvas")).toBeVisible();
                 const control = page.locator("#number-n");
                 if (!(await control.isVisible()))
@@ -446,6 +447,21 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog, l
               );
             }
           }
+          const downloadScenario: Extract<Scenario, { caseId: string }> = {
+            caseId: reviewDownloadCase.id, browser: browserName, width, downloads: [], passed: false, checks: [],
+          };
+          scenarios.push(downloadScenario);
+          const page = await context.newPage();
+          try {
+            downloadScenario.downloads = await verifyReviewDownloads(page, baseUrl, catalog, outputs);
+            downloadScenario.checks.push("review and answer PDF downloads match the release bundle");
+            downloadScenario.passed = true;
+          } catch (error) {
+            downloadScenario.error = error instanceof ReviewDownloadError ? error.message : "REVIEW_PDF_DOWNLOAD_FAILED";
+          } finally {
+            await page.close();
+          }
+          log(`Representative ${browserName} ${width} ${reviewDownloadCase.id}: ${downloadScenario.error ?? "PASS"}`);
         } finally {
           await context.close();
         }
@@ -455,7 +471,7 @@ export async function verifyRepresentatives(baseUrl: string, catalog: Catalog, l
     }
   }
   return {
-    complete: scenarios.length === 42 && scenarios.every((s) => s.passed),
+    complete: scenarios.length === representativeScenarioCount && scenarios.every((s) => s.passed),
     scenarios,
     observations,
   };
