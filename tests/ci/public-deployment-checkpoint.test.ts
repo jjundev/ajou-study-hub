@@ -39,6 +39,13 @@ test('requires successful public verification and valid IDs', () => {
   expect(() => checkpointFromReceipt({ ...input, runId: '9007199254740992' })).toThrow();
 });
 
+test('binds optional transform metadata only to a verified publication', () => {
+  const transformIndexHash = 'f'.repeat(64);
+  expect(checkpointFromReceipt({ ...input, transformIndexHash })).toMatchObject({ bundleHash, transformIndexHash });
+  expect(() => checkpointFromReceipt({ ...input, transformIndexHash: 'invalid' })).toThrow();
+  expect(() => checkpointFromReceipt({ ...input, transformIndexHash, receipt: { ...receipt, status: 'uploaded-postcheck-pending' } })).toThrow();
+});
+
 test('ties the checkpoint to the target, input, deployment and version', async () => {
   const checkpoint = checkpointFromReceipt(input);
   const matching = { checkpoint, appSha, inputHash, target, readActive: async () => active };

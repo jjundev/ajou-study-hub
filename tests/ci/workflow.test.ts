@@ -22,9 +22,27 @@ test('default_disabled_has_no_early_cloud_credentials and serializes production 
  const steps=job.steps;
  expect(steps.filter((s:any)=>s.uses).every((s:any)=>/@[a-f0-9]{40}$/.test(s.uses))).toBe(true);
  expect(steps.find((s:any)=>s.id==='reader').with['permission-contents']).toBe('read');
- expect(steps.find((s:any)=>s.id==='summary-upload').with).toMatchObject({path:'app/ci-summary.json','retention-days':7});
+ expect(steps.find((s:any)=>s.id==='summary-upload').with).toMatchObject({path:'app/.reports/ci-summary.json','retention-days':7});
  expect(steps.find((s:any)=>s.id==='summary-upload').with.name)
   .toContain("format('verify-metadata-{0}', github.run_attempt)");
+});
+test('document reuse is an opt-in post-publish comparison and uploads only an index',async()=>{
+ const steps=(await load()).jobs.verify.steps;
+ const publish=steps.findIndex((s:any)=>s.id==='publish');
+ const compare=steps.findIndex((s:any)=>s.id==='observe-document-transforms');
+ const boundary=steps.findIndex((s:any)=>s.id==='transform-observe-boundary');
+ const prepare=steps.findIndex((s:any)=>s.id==='transform-observe-index');
+ expect(publish).toBeLessThan(boundary);expect(boundary).toBeLessThan(prepare);expect(prepare).toBeLessThan(compare);
+ expect(steps[boundary].if).toContain("vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe'");
+ expect(steps[boundary].if).toContain("steps.publish.outcome == 'success'");
+ expect(steps[prepare].if).toContain("steps.transform-observe-boundary.outcome == 'success'");
+ expect(steps[compare].if).toContain("steps.transform-observe-index.outcome == 'success'");
+ expect(JSON.stringify(steps[compare].env)).not.toMatch(/token|secrets/i);
+ expect(steps[compare]['continue-on-error']).toBe(true);
+ const upload=steps.find((s:any)=>s.name==='Upload verified document transform metadata');
+ expect(upload.with.path).toBe('app/.reports/document-transform-index.json');
+ expect(upload.if).toContain("steps.upload-public-checkpoint.outcome == 'success'");
+ expect(steps[publish].run).not.toContain('observe-document-transforms');
 });
 test('app and five sources use fixed SHA refs without persisted credentials',async()=>{
  const workflow=await load(),steps=workflow.jobs.verify.steps;
@@ -182,7 +200,10 @@ test('secrets and receipt handling remain bound to their steps',async()=>{
  expect(steps.indexOf(publish)).toBeGreaterThan(boundary);
  const permit='${{ steps.compare-public-inputs.outcome == \'success\' && steps.compare-public-inputs.outputs.course_release || \'\' }}';
  expect(publish.env).toEqual({STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS:'${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}',CLOUDFLARE_API_TOKEN:'${{ secrets.CLOUDFLARE_API_TOKEN }}',CLOUDFLARE_READ_TOKEN:'${{ secrets.CLOUDFLARE_READ_TOKEN }}',COURSE_RELEASE:permit});
- expect(steps.find((s:any)=>s.name==='Build and verify the same pinned material checkout').env).toEqual({COURSE_RELEASE:permit});
+ expect(steps.find((s:any)=>s.name==='Build and verify the same pinned material checkout').env).toEqual({
+  COURSE_RELEASE:permit,
+  RECORD_DOCUMENT_TRANSFORMS:"${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' }}",
+ });
  expect(publish.run).toContain('validatePublicSettings(settings)');
  expect(publish.run).toContain("writeFile('.local/public-deployment.json'");
  expect(publish.run).toContain('node --import tsx tools/deploy/public-release.ts --automatic');expect(publish.run).not.toMatch(/playwright|chromium|wrangler|deploy:private|deploy:automatic|ledger/i);
@@ -223,6 +244,10 @@ test('only eligible course updates may skip expensive steps', async () => {
   { name:'course observe without a comparable baseline', coursePolicy:'observe', match:'false', compare:true, skip:false },
   { name:'course observe cannot run after the comparison fails', coursePolicy:'observe', match:'false', changed:'life-science', comparisonFailed:true, compare:true, skip:false },
   { name:'course observe cannot run if the full path fails', coursePolicy:'observe', match:'false', changed:'life-science', publishFailed:true, compare:true, skip:false },
+  { name:'document reuse can observe independently of the browser policy', transformPolicy:'observe', policy:'', match:'false', transformBase:'previous index', transformObserve:true, compare:true, skip:false },
+  { name:'document reuse waits for its first published index', transformPolicy:'observe', policy:'', match:'false', compare:true, skip:false },
+  { name:'document reuse cannot observe a failed publication', transformPolicy:'observe', policy:'', match:'false', transformBase:'previous index', publishFailed:true, compare:true, skip:false },
+  { name:'document reuse respects the unchanged deployment skip', transformPolicy:'observe', compare:true, skip:true },
   { name:'default mode', policy:'', compare:false, skip:false },
   { name:'input mismatch', match:'false', compare:true, skip:false },
   { name:'fingerprint failure', fingerprintFailed:true, compare:false, skip:false },
@@ -233,7 +258,7 @@ test('only eligible course updates may skip expensive steps', async () => {
  for (const row of scenarios) {
   let success = row.success ?? true;
   const vars = { STUDY_HUB_AUTOMATIC_UPDATES:row.enabled ?? 'enabled', STUDY_HUB_UNCHANGED_DEPLOYMENTS:row.policy ?? 'skip',
-   STUDY_HUB_COURSE_VERIFICATION:row.coursePolicy ?? '' };
+   STUDY_HUB_COURSE_VERIFICATION:row.coursePolicy ?? '', STUDY_HUB_DOCUMENT_TRANSFORM_REUSE:row.transformPolicy ?? '' };
   const inputs = { mode:row.mode ?? 'default', source_repository:row.source ?? course };
   const github = { event_name:row.event ?? 'workflow_dispatch' };
   const known: Record<string,{outputs:Record<string,string>;outcome?:string}> = {};
@@ -257,6 +282,7 @@ test('only eligible course updates may skip expensive steps', async () => {
     known[step.id]!.outcome=row.comparisonFailed ? 'failure' : 'success';
     known[step.id]!.outputs.match=row.match ?? 'true';
     known[step.id]!.outputs.changed_courses=row.changed ?? '';
+    known[step.id]!.outputs.transform_base=row.transformBase ?? '';
    }
    if (run && step.id==='skip-public-deployment') known[step.id]!.outputs.skip='true';
    if (run && step.id==='publish' && row.publishFailed) {
@@ -271,6 +297,7 @@ test('only eligible course updates may skip expensive steps', async () => {
   expect(outcomes.get('compare-public-inputs'),row.name).toBe(row.compare);
   expect(outcomes.get('skip-public-deployment'),row.name).toBe(row.skip);
   expect(outcomes.get('observe-course-verification') ?? false,row.name).toBe(row.observe ?? false);
+  expect(outcomes.get('observe-document-transforms') ?? false,row.name).toBe(row.transformObserve ?? false);
   expect(outcomes.get('boundary'),row.name).toBe(row.success ?? true);
   expect(outcomes.get('Report the verified unchanged deployment'),row.name).toBe(row.skip && !row.boundaryFailed);
   for (const name of names) {

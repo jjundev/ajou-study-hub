@@ -188,7 +188,8 @@ jobs:
         if: >-
           ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
               (vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'observe' || vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'skip' ||
-               vars.STUDY_HUB_COURSE_VERIFICATION == 'observe' || vars.STUDY_HUB_COURSE_VERIFICATION == 'apply') }}
+               vars.STUDY_HUB_COURSE_VERIFICATION == 'observe' || vars.STUDY_HUB_COURSE_VERIFICATION == 'apply' ||
+               vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe') }}
         continue-on-error: true
         env:
           UNCHANGED_DEPLOYMENTS: ${{ vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS }}
@@ -212,6 +213,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
           COURSE_VERIFICATION: ${{ vars.STUDY_HUB_COURSE_VERIFICATION }}
+          DOCUMENT_TRANSFORM_REUSE: ${{ vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE }}
           STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
         run: node --import tsx tools/ci/public-deployment-checkpoint.ts compare
       - name: Skip a verified unchanged course deployment
@@ -239,11 +241,15 @@ jobs:
         if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         run: node tools/ci/process-boundary.ts probe-processes "$RUNNER_TEMP/study-hub-trusted.json"
       - name: Build and verify the same pinned material checkout
+        id: material
         if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         env:
           COURSE_RELEASE: ${{ steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.course_release || '' }}
+          RECORD_DOCUMENT_TRANSFORMS: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' }}
         run: |
+          build_started_at="$(date +%s%3N)"
           npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }
+          printf 'build_started_at=%s\nbuild_finished_at=%s\n' "$build_started_at" "$(date +%s%3N)" >> "$GITHUB_OUTPUT"
           verify_material() {
             node --import tsx tools/ci/verify-material.ts
           }
@@ -343,7 +349,7 @@ jobs:
           const summary={appSha:process.env.GITHUB_SHA,counts:{sources:5},sourceShas,code:'VERIFICATION_PASSED'};
           const bytes=JSON.stringify(summary)+'\n';
           if(!/^[a-f0-9]{40}$/.test(summary.appSha)||Buffer.byteLength(bytes)>1048576)throw Error('CI_SUMMARY_REJECTED');
-          await writeFile('ci-summary.json',bytes,{flag:'wx'});
+          await writeFile('.reports/ci-summary.json',bytes,{flag:'wx'});
           NODE
       - name: Upload safe metadata only
         id: summary-upload
@@ -351,7 +357,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ github.run_attempt == 1 && 'verify-metadata' || format('verify-metadata-{0}', github.run_attempt) }}
-          path: app/ci-summary.json
+          path: app/.reports/ci-summary.json
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: false
@@ -426,6 +432,7 @@ jobs:
           }
           NODE
           if [ "$publication_status" -ne 0 ]; then echo CI_AUTOMATIC_PUBLICATION_FAILED_INSPECT_CURRENT_TARGET; exit 1; fi
+          printf 'published_at=%s\n' "$(date +%s%3N)" >> "$GITHUB_OUTPUT"
       - name: Record the verified public deployment checkpoint
         id: record-public-checkpoint
         if: >-
@@ -436,6 +443,7 @@ jobs:
           STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
           EXPECTED_PUBLIC_INPUT_HASH: ${{ steps.fingerprint-public-inputs.outputs.input_hash }}
           COURSE_RELEASE: ${{ steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.course_release || '' }}
+          DOCUMENT_TRANSFORM_REUSE: ${{ vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE }}
         run: node --import tsx tools/ci/public-deployment-checkpoint.ts record
       - name: Upload the public deployment checkpoint
         id: upload-public-checkpoint
@@ -445,6 +453,16 @@ jobs:
         with:
           name: public-checkpoint-${{ github.run_attempt }}
           path: app/.reports/public-checkpoint.json
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: false
+      - name: Upload verified document transform metadata
+        if: ${{ steps.upload-public-checkpoint.outcome == 'success' && steps.record-public-checkpoint.outputs.transform_index_saved == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: document-transform-index-${{ github.run_attempt }}
+          path: app/.reports/document-transform-index.json
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: false
@@ -470,3 +488,56 @@ jobs:
           timeout --kill-after=15s 10m node --import tsx tools/ci/observe-course-verification.ts .local/ci-sources.json "$CHANGED_COURSES" || result=$?
           node tools/ci/process-boundary.ts check "$RUNNER_TEMP/study-hub-trusted.json"
           if [ "$result" -ne 0 ]; then echo '::warning::CI_COURSE_COMPARISON_UNAVAILABLE'; exit 1; fi
+      - name: Check the process boundary before the document transform observation
+        id: transform-observe-boundary
+        if: >-
+          ${{ vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' && steps.publish.outcome == 'success' &&
+              steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.transform_base != '' }}
+        continue-on-error: true
+        run: |
+          printf 'started_at=%s\n' "$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+          node tools/ci/process-boundary.ts check "$RUNNER_TEMP/study-hub-trusted.json"
+      - name: Read the previous verified document transform index
+        id: transform-observe-index
+        if: ${{ steps.transform-observe-boundary.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCUMENT_TRANSFORM_BASELINE: ${{ steps.compare-public-inputs.outputs.transform_base }}
+        run: node --import tsx tools/ci/observe-document-transforms.ts prepare
+      - name: Compare an isolated document reuse build with the published bundle
+        id: observe-document-transforms
+        if: ${{ steps.transform-observe-index.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          DOCUMENT_TRANSFORM_BASELINE: ${{ steps.compare-public-inputs.outputs.transform_base }}
+          STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
+          INDEX_FETCH_MS: ${{ steps.transform-observe-index.outputs.index_fetch_ms }}
+          DISPATCH_AT: ${{ steps.transform-observe-index.outputs.dispatch_at }}
+          JOB_STARTED_AT: ${{ steps.transform-observe-index.outputs.job_started_at }}
+          BASELINE_BUILD_STARTED_AT: ${{ steps.material.outputs.build_started_at }}
+          BASELINE_BUILD_FINISHED_AT: ${{ steps.material.outputs.build_finished_at }}
+          PUBLISHED_AT: ${{ steps.publish.outputs.published_at }}
+        run: |
+          result=0
+          timeout --kill-after=10s 150s node --import tsx tools/ci/observe-document-transforms.ts observe || result=$?
+          node tools/ci/process-boundary.ts check "$RUNNER_TEMP/study-hub-trusted.json"
+          exit "$result"
+      - name: Report document transform observation overhead
+        if: >-
+          ${{ vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' && steps.publish.outcome == 'success' &&
+              github.event_name == 'workflow_dispatch' && inputs.source_repository != '' }}
+        env:
+          OBSERVATION_STARTED_AT: ${{ steps.transform-observe-boundary.outputs.started_at }}
+          OBSERVATION_OUTCOME: ${{ steps.observe-document-transforms.outcome }}
+        run: |
+          if [[ "$OBSERVATION_STARTED_AT" =~ ^[0-9]{13}$ ]]; then
+            observation_ms=$(($(date +%s%3N) - OBSERVATION_STARTED_AT))
+            printf 'Document HTML/CSS observation overhead (ms) %s\n' "$observation_ms" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ "$OBSERVATION_OUTCOME" != success ]]; then
+            echo 'Document HTML/CSS reuse (observe) · unavailable' >> "$GITHUB_STEP_SUMMARY"
+            echo '::warning::CI_DOCUMENT_TRANSFORM_OBSERVATION_UNAVAILABLE'
+          fi

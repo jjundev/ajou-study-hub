@@ -9,6 +9,8 @@ import { digest, isRecord } from '../deploy/access-policy.js';
 import { courseOutputHashes, isCourseCoverage, isolatedRuntimeCourses, parseCourseRelease, selectCourseRelease,
   type CourseCoverage, type CourseRelease } from '../course-release.js';
 import type { BuildReport } from '../content/report.js';
+import { parseTransformIndex, transformIndexFilename, transformIndexLimit } from './document-transform-reuse.js';
+import { createHash } from 'node:crypto';
 import type { Catalog } from '../../src/content/model.js';
 import {
   readActiveDeployment, readWorkerTarget, validatePublicSettings, workerVersionId,
@@ -24,6 +26,7 @@ export type PublicCheckpoint = {
   deploymentId: string;
   versionId: string;
   bundleHash: string;
+  transformIndexHash?: string;
 } & ({ schema: 1; courseHashes?: never; coverage?: never } |
   { schema: 2; courseHashes: PublicInputFingerprint['courseHashes']; coverage?: never } |
   { schema: 3; courseHashes: PublicInputFingerprint['courseHashes']; coverage: CourseCoverage });
@@ -61,6 +64,10 @@ function checkedCheckpoint(value: unknown): PublicCheckpoint {
     if (!isCourseCoverage(value.coverage)) throw invalid();
     fields.push('coverage');
   }
+  if (Object.hasOwn(value, 'transformIndexHash')) {
+    if (!valid(value.transformIndexHash, sha256)) throw invalid();
+    fields.push('transformIndexHash');
+  }
   if (Object.keys(value).length !== fields.length || !fields.every(field => Object.hasOwn(value, field))) throw invalid();
   return value as PublicCheckpoint;
 }
@@ -69,9 +76,10 @@ export function checkpointFromReceipt(input: {
   runId: string; attempt: number; appSha: string; inputHash: string;
   courseHashes?: PublicInputFingerprint['courseHashes'];
   coverage?: CourseCoverage;
+  transformIndexHash?: string;
   target: PublicDeploymentSettings; receipt: unknown;
 }): PublicCheckpoint {
-  const { runId, attempt, appSha, inputHash, courseHashes, coverage, target, receipt } = input;
+  const { runId, attempt, appSha, inputHash, courseHashes, coverage, transformIndexHash, target, receipt } = input;
   validatePublicSettings(target);
   if (!isRecord(receipt) || receipt.status !== 'published-public-verified' ||
       receipt.versionId !== receipt.currentVersionId ||
@@ -81,6 +89,7 @@ export function checkpointFromReceipt(input: {
     ...(coverage ? { schema: 3, courseHashes, coverage } : courseHashes ? { schema: 2, courseHashes } : { schema: 1 }),
     runId, attempt, appSha, inputHash, targetHash: digest(target),
     deploymentId: receipt.deploymentId, versionId: receipt.versionId, bundleHash: receipt.bundleHash,
+    ...(transformIndexHash === undefined ? {} : { transformIndexHash }),
   });
 }
 
@@ -238,6 +247,7 @@ async function compare(): Promise<void> {
   let match: PublicCheckpoint | null = null;
   let changedCourses: string[] = [];
   let release: ReturnType<typeof parseCourseRelease>;
+  let transformBase: string | undefined;
   try {
     const { GITHUB_RUN_ID: currentRunId, GITHUB_SHA: appSha, RUNNER_TEMP: scratch,
       CLOUDFLARE_READ_TOKEN: token, GH_TOKEN, ...cliEnv } = process.env;
@@ -254,9 +264,10 @@ async function compare(): Promise<void> {
       })).stdout,
     });
     const policy = process.env.COURSE_VERIFICATION;
+    const observeTransforms = process.env.DOCUMENT_TRANSFORM_REUSE === 'observe';
     const decision = await comparePublicInputs({
       checkpoint, appSha, inputHash, target,
-      courseHashes: policy === 'observe' || policy === 'apply' ? courseHashes : undefined,
+      courseHashes: policy === 'observe' || policy === 'apply' || observeTransforms ? courseHashes : undefined,
       readActive: async () => {
         const timeout = AbortSignal.timeout(30000);
         const api = { token, fetch: ((url, options) => fetch(url, {
@@ -270,6 +281,10 @@ async function compare(): Promise<void> {
     changedCourses = decision.changedCourses;
     if (policy === 'apply' && checkpoint && changedCourses.length)
       release = courseReleaseFromCheckpoint(checkpoint, changedCourses);
+    if (observeTransforms && checkpoint?.transformIndexHash && changedCourses.length) {
+      const { runId, attempt, appSha, bundleHash, transformIndexHash } = checkpoint;
+      transformBase = JSON.stringify({ runId, attempt, appSha, bundleHash, transformIndexHash });
+    }
   } catch {
     // Comparison is optional. Provider output and local paths stay out of logs.
   }
@@ -277,6 +292,7 @@ async function compare(): Promise<void> {
   await appendFile(output, match ? 'bundle_hash=' + match.bundleHash + '\nmatch=true\n' : 'match=false\n');
   if (changedCourses.length) await appendFile(output, 'changed_courses=' + changedCourses.join(',') + '\n');
   if (release) await appendFile(output, 'course_release=' + JSON.stringify(release) + '\n');
+  if (transformBase) await appendFile(output, 'transform_base=' + transformBase + '\n');
 }
 
 async function readCoverage(receipt: unknown): Promise<CourseCoverage | undefined> {
@@ -309,8 +325,21 @@ async function record(): Promise<void> {
   const reports = resolve('.reports');
   const receipt = JSON.parse(await readSmallFile(resolve(reports, 'public-release.json')));
   const coverage = await readCoverage(receipt).catch(() => undefined);
-  const checkpoint = checkpointFromReceipt({ runId, attempt: Number(attempt), appSha, inputHash, courseHashes, coverage, target: settings(), receipt });
+  let transformIndexHash: string | undefined;
+  if (process.env.DOCUMENT_TRANSFORM_REUSE === 'observe') {
+    try {
+      const text = await readSmallFile(resolve(reports, transformIndexFilename), transformIndexLimit);
+      if (!isRecord(receipt) || !valid(receipt.bundleHash, sha256)) throw invalid();
+      parseTransformIndex(text, appSha, receipt.bundleHash);
+      transformIndexHash = createHash('sha256').update(text).digest('hex');
+    } catch {
+      console.warn('CI_DOCUMENT_TRANSFORM_INDEX_UNAVAILABLE');
+    }
+  }
+  const checkpoint = checkpointFromReceipt({ runId, attempt: Number(attempt), appSha, inputHash, courseHashes, coverage, transformIndexHash, target: settings(), receipt });
   await writeFile(resolve(reports, filename), JSON.stringify(checkpoint) + '\n', { flag: 'wx', mode: 0o600 });
+  if (transformIndexHash && process.env.GITHUB_OUTPUT)
+    await appendFile(process.env.GITHUB_OUTPUT, 'transform_index_saved=true\n');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

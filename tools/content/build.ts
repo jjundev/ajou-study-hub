@@ -29,12 +29,14 @@ import {
   type ContentException,
 } from "./preflight.js";
 import { writeReport, validateReportPath, type BuildReport } from "./report.js";
+import { documentTransformKey, type TransformBuild, type TransformEntry, type TransformRequest } from "./document-transform-key.js";
 export type BuildResult = {
   catalog: Catalog;
   outputDir: string;
   bundleHash: string;
   reportPath: string;
   issues: Issue[];
+  documentTransforms?: TransformEntry[];
 };
 const sha = (bytes: Uint8Array | string) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -68,6 +70,7 @@ export async function buildContent(options: {
   outputDir: string;
   reportDir: string;
   configs?: CourseConfig[];
+  documentTransforms?: TransformBuild;
 }): Promise<BuildResult> {
   const outputDir = resolve(options.outputDir);
   await assertOutput(outputDir);
@@ -153,6 +156,28 @@ export async function buildContent(options: {
         minify: true,
       })
     ).outputFiles[0]!.text;
+    const outputPath = (file: (typeof graph.files)[number]) =>
+      `content/${file.courseId}/${file.sourcePath.normalize("NFC")}`;
+    // Keep raw source paths for document lookup. Normalization is for output URLs only.
+    const documents = new Map(catalog.documents.map(doc => [doc.courseId + "/" + doc.sourcePath, doc]));
+    const documentFor = (file: (typeof graph.files)[number]) => documents.get(file.courseId + "/" + file.sourcePath)!;
+    const requests = new Map<string, TransformRequest>();
+    if (options.documentTransforms) {
+      const bootstrapHash = sha(bootstrap);
+      for (const file of graph.files) {
+        if (file.kind === "asset") continue;
+        const path = outputPath(file);
+        const key = documentTransformKey({
+          appSha: options.documentTransforms.appSha,
+          path,
+          kind: file.kind,
+          sourceHash: file.sha256,
+          ...(file.kind === "html" ? { injectionHash: sha(JSON.stringify([documentFor(file), bootstrapHash])) } : {}),
+        });
+        requests.set(path, { key, path });
+      }
+    }
+    const restored = await options.documentTransforms?.restore?.([...requests.values()]);
     const outputs = new Map<string, Uint8Array>();
     for (const file of graph.files) {
       const forbidden = file.sourcePath
@@ -173,8 +198,10 @@ export async function buildContent(options: {
         });
         continue;
       }
-      let bytes = file.bytes;
-      if (file.kind !== "asset") {
+      const path = outputPath(file);
+      const reused = restored?.get(path);
+      let bytes = reused ?? file.bytes;
+      if (!reused && file.kind !== "asset") {
         let text = rebaseReferences(
           new TextDecoder().decode(bytes),
           file.kind,
@@ -184,16 +211,11 @@ export async function buildContent(options: {
         if (file.kind === "html")
           text = transformHtml(
             text,
-            catalog.documents.find(
-              (d) =>
-                d.courseId === file.courseId &&
-                d.sourcePath === file.sourcePath,
-            )!,
+            documentFor(file),
             bootstrap,
           );
         bytes = new TextEncoder().encode(text);
       }
-      const path = `content/${file.courseId}/${file.sourcePath.normalize("NFC")}`;
       if (outputs.has(path)) throw new Error(`Output collision: ${path}`);
       outputs.set(path, bytes);
     }
@@ -303,6 +325,12 @@ export async function buildContent(options: {
       bundleHash: report.bundleHash,
       reportPath,
       issues: report.issues,
+      ...(options.documentTransforms && !options.documentTransforms.restore ? {
+        documentTransforms: report.outputs.flatMap(({ path, sha256, size }) => {
+          const request = requests.get(path);
+          return request ? [{ key: request.key, sha256, size }] : [];
+        }),
+      } : {}),
     };
   } catch (error) {
     report.issues.push({

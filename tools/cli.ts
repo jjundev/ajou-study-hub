@@ -1,14 +1,13 @@
-import { readFile, readdir, realpath } from "node:fs/promises";
-import { resolve, relative } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { buildContent } from "./content/build.js";
 import { writeReport, validateReportPath, type BuildReport } from "./content/report.js";
-import { checkBundle, bundleLimits } from "./content/preflight.js";
 import type { SourceSettings } from "./content/source.js";
 import { parseAppArguments, validateAppOutput } from './app-build-safety.js';
-import { applyHosting } from './deploy/bootstrap.js';
+import { finishAppBuild } from './app-build.js';
+import { encodeTransformIndex, transformIndexFilename } from './ci/document-transform-reuse.js';
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (command === 'deploy:private') {
@@ -40,10 +39,14 @@ async function main() {
   const reportPath = resolve('.reports/app-build.json');
   const exclusions = [outputDir, ...Object.values(settings.roots)];
   if (command === 'build') await validateReportPath(reportPath, exclusions);
+  const appSha = process.env.GITHUB_SHA;
+  const recordTransforms = command === 'build' && process.env.GITHUB_ACTIONS === 'true' &&
+    process.env.RECORD_DOCUMENT_TRANSFORMS === 'true' && /^[a-f0-9]{40}$/.test(appSha ?? '') && appSha;
   const result = await buildContent({
     settings,
     outputDir: resolve(".generated/content"),
     reportDir: resolve(".reports"),
+    ...(recordTransforms ? { documentTransforms: { appSha: recordTransforms } } : {}),
   });
   console.log(
     JSON.stringify(
@@ -70,24 +73,22 @@ async function main() {
   });
   if (command === 'build') {
     await validateAppOutput(Object.values(settings.roots), resolve(sources));
-    await applyHosting(outputDir);
     const report = JSON.parse(await readFile(result.reportPath, 'utf8')) as BuildReport;
-    const outputs: BuildReport['outputs'] = [];
-    const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
-    async function visit(dir: string) {
-      for (const entry of await readdir(dir, { withFileTypes: true })) {
-        const path = resolve(dir, entry.name);
-        if (entry.isSymbolicLink()) throw Error('Symlink in final app output');
-        if (entry.isDirectory()) await visit(path);
-        else if (entry.isFile()) { const bytes = await readFile(path); outputs.push({ path: relative(outputDir, path).replaceAll('\\', '/'), size: bytes.length, sha256: hash(bytes) }); }
+    const final = await finishAppBuild(outputDir, report);
+    await writeReport(final, reportPath, exclusions);
+    if (recordTransforms && result.documentTransforms?.length) {
+      try {
+        const finalOutputs = new Map(final.outputs.map(file => [file.path, file]));
+        if (report.outputs.some(file => {
+          const output = finalOutputs.get(file.path);
+          return output?.sha256 !== file.sha256 || output.size !== file.size;
+        })) throw Error('Document transform bytes differ from app output');
+        const text = encodeTransformIndex(recordTransforms, result.documentTransforms, final.bundleHash);
+        await writeReport(JSON.parse(text), resolve('.reports', transformIndexFilename), exclusions);
+      } catch {
+        console.warn('CI_DOCUMENT_TRANSFORM_INDEX_UNAVAILABLE');
       }
     }
-    await validateAppOutput(Object.values(settings.roots), resolve(sources));
-    await visit(outputDir);
-    outputs.sort((a,b) => a.path.localeCompare(b.path));
-    const issues = checkBundle(outputs, bundleLimits);
-    if (issues.length) throw Error('Final app bundle exceeds hosting limits');
-    await writeReport({ ...report, createdAt: new Date().toISOString(), outputs, bundleHash: hash(outputs.map(f => `${f.path}\0${f.sha256}\n`).join('')) }, reportPath, exclusions);
     console.log(`Final app report: ${reportPath}`);
   }
 }
