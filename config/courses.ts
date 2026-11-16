@@ -15,14 +15,18 @@ export type CourseConfig = Course & {
 import { logicWorkbookFigures } from "./dynamic-assets.js";
 const additionalRoots: Record<string, string[]> = {
   "circuits-2": [
-    "workbook/pdf",
+    "workbook/pdf/ch09-문제.pdf",
+    "workbook/pdf/ch10-문제.pdf",
+    "workbook/pdf/ch11-문제.pdf",
+    "workbook/pdf/ch12-문제.pdf",
+    "workbook/pdf/ch13-문제.pdf",
     ".claude/skills/ec2-problem-explain/assets/vendor/pretendard",
     ".claude/skills/ec2-problem-explain/assets/vendor/katex",
   ],
   "data-structures": [
     "자료구조_강의록_2026",
     "실습",
-    "과제",
+    "과제/과제2/HW2.pdf",
   ],
   "ml-basics": [
     "강의노트",

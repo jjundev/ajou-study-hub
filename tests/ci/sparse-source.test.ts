@@ -18,11 +18,11 @@ test('extra files cannot independently authorize an outside root',()=>{
 });
 test.each([
  ['circuits-2', [
-   '/workbook/pdf',
+   '/workbook/pdf/ch11-문제.pdf', '/workbook/pdf/ch12-문제.pdf', '/workbook/pdf/ch13-문제.pdf',
    '/.claude/skills/ec2-problem-explain/assets/vendor/pretendard',
    '/.claude/skills/ec2-problem-explain/assets/vendor/katex',
  ]],
- ['data-structures', ['/자료구조_강의록_2026', '/실습', '/과제']],
+ ['data-structures', ['/자료구조_강의록_2026', '/실습', '/과제/과제2/HW2.pdf']],
  ['ml-basics', ['/강의노트', '/assets/vendor/pretendard', '/assets/vendor/katex']],
 ] as const)('selects the new approved source paths for %s', (id, paths) => {
  const course = courses.find(course => course.id === id)!;
