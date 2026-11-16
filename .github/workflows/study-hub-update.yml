@@ -248,7 +248,18 @@ jobs:
           RECORD_DOCUMENT_TRANSFORMS: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' }}
         run: |
           build_started_at="$(date +%s%3N)"
-          npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1 || { echo CI_BUILD_FAILED; exit 1; }
+          if ! npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1; then
+            node --input-type=module <<'BUILD_ERR'
+          import {readFile} from 'node:fs/promises';
+          try {
+            const report=JSON.parse(await readFile('.reports/content-build.json','utf8'));
+            const errors=(report.issues??[]).filter(issue=>issue.severity==='error')
+              .map(({code,courseId,sourcePath,target,reason})=>({code,courseId,sourcePath,target,reason}));
+            console.error(JSON.stringify({code:'CI_BUILD_FAILED',errors}));
+          } catch { console.error('CI_BUILD_FAILED'); }
+          BUILD_ERR
+            exit 1
+          fi
           printf 'build_started_at=%s\nbuild_finished_at=%s\n' "$build_started_at" "$(date +%s%3N)" >> "$GITHUB_OUTPUT"
           verify_material() {
             node --import tsx tools/ci/verify-material.ts

@@ -15,27 +15,17 @@ export type CourseConfig = Course & {
 import { logicWorkbookFigures } from "./dynamic-assets.js";
 const additionalRoots: Record<string, string[]> = {
   "circuits-2": [
-    "workbook/pdf/ch09-문제.pdf",
-    "workbook/pdf/ch10-문제.pdf",
-    "workbook/pdf/ch11-문제.pdf",
-    "workbook/pdf/ch12-문제.pdf",
+    "workbook/pdf",
     ".claude/skills/ec2-problem-explain/assets/vendor/pretendard",
     ".claude/skills/ec2-problem-explain/assets/vendor/katex",
   ],
   "data-structures": [
-    "자료구조_강의록_2026/Software_2_Recursion.pdf",
-    "자료구조_강의록_2026/Software_3_ArrayStructureList.pdf",
-    "자료구조_강의록_2026/Software_4_List.pdf",
-    "자료구조_강의록_2026/Software_5_Stack.pdf",
-    "자료구조_강의록_2026/Software_6_Queue.pdf",
-    "자료구조_강의록_2026/Software_7_Tree.pdf",
-    "자료구조_강의록_2026/Software_8_Heap.pdf",
-    "실습/실습2/Practice2.pdf",
-    "과제/과제2/HW2.pdf",
+    "자료구조_강의록_2026",
+    "실습",
+    "과제",
   ],
   "ml-basics": [
-    "강의노트/추가 강의",
-    "강의노트/Lecture06_PCA_Part2.pdf",
+    "강의노트",
     "assets/vendor/pretendard",
     "assets/vendor/katex",
   ],
