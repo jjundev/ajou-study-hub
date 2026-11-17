@@ -15,7 +15,7 @@ export function checkFileLimit(metrics:SourceMetrics,size:number):void{
  metrics.files++;metrics.totalBytes+=size;metrics.maxFileBytes=Math.max(metrics.maxFileBytes,size);
  if(metrics.files>100000)reject('CI_SOURCE_FILE_COUNT_LIMIT');
  if(size>256*1024**2)reject('CI_SOURCE_MAX_FILE_LIMIT');
- if(metrics.totalBytes>2*1024**3)reject('CI_SOURCE_TOTAL_BYTES_LIMIT');
+ if(metrics.totalBytes>3*1024**3)reject('CI_SOURCE_TOTAL_BYTES_LIMIT');
 }
 export function checkFreeSpace(metrics:SourceMetrics,free:bigint):void{
  metrics.freeBytes=bounded(Number(free>BigInt(Number.MAX_SAFE_INTEGER)?BigInt(Number.MAX_SAFE_INTEGER):free));
