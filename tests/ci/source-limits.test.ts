@@ -12,11 +12,11 @@ let root='';
 const metrics=():SourceMetrics=>({files:0,totalBytes:0,maxFileBytes:0,freeBytes:0});
 afterEach(async()=>{if(root)await rm(root,{recursive:true,force:true});root='';});
 test('preserves inclusive file count, per-file and aggregate boundaries',()=>{
- const m=metrics();m.files=99999;m.totalBytes=2*1024**3-256*1024**2;
- checkFileLimit(m,256*1024**2);expect(m).toMatchObject({files:100000,totalBytes:2147483648,maxFileBytes:268435456});
+ const m=metrics();m.files=99999;m.totalBytes=3*1024**3-256*1024**2;
+ checkFileLimit(m,256*1024**2);expect(m).toMatchObject({files:100000,totalBytes:3221225472,maxFileBytes:268435456});
  expect(()=>checkFileLimit(m,0)).toThrow('CI_SOURCE_FILE_COUNT_LIMIT');
  expect(()=>checkFileLimit(metrics(),268435457)).toThrow('CI_SOURCE_MAX_FILE_LIMIT');
- const total=metrics();total.totalBytes=2147483648;expect(()=>checkFileLimit(total,1)).toThrow('CI_SOURCE_TOTAL_BYTES_LIMIT');
+ const total=metrics();total.totalBytes=3221225472;expect(()=>checkFileLimit(total,1)).toThrow('CI_SOURCE_TOTAL_BYTES_LIMIT');
 });
 test('preserves actual four GiB free-space boundary and bounds safe counters',()=>{
  const m=metrics();checkFreeSpace(m,4294967296n);expect(m.freeBytes).toBe(4294967296);
