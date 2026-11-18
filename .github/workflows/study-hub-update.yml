@@ -228,7 +228,17 @@ jobs:
       - name: Install three browsers
         id: browsers
         if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
-        run: npx playwright install --with-deps chromium firefox webkit > /dev/null 2>&1 || { echo CI_BROWSER_INSTALL_FAILED; exit 1; }
+        timeout-minutes: 25
+        run: |
+          # Bound each attempt so a stalled apt/CDN download fails fast instead of
+          # holding the production concurrency group until the 60-minute job limit.
+          log="$RUNNER_TEMP/browser-install.log"
+          for attempt in 1 2; do
+            if timeout -k 30 600 npx playwright install --with-deps chromium firefox webkit > "$log" 2>&1; then exit 0; fi
+            echo "CI_BROWSER_INSTALL_ATTEMPT_FAILED attempt=$attempt"
+            tail -n 40 "$log"
+          done
+          echo CI_BROWSER_INSTALL_FAILED; exit 1
       - name: Typecheck and synthetic tests
         if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         run: |
