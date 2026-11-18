@@ -233,10 +233,19 @@ jobs:
           # Bound each attempt so a stalled apt/CDN download fails fast instead of
           # holding the production concurrency group until the 60-minute job limit.
           log="$RUNNER_TEMP/browser-install.log"
+          # Some runner images point apt at a slow regional mirror; prefer fast public mirrors.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            printf 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://archive.ubuntu.com/ubuntu/\tpriority:2\n' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          printf 'DPkg::Lock::Timeout "120";\nAcquire::Retries "3";\nAcquire::http::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/99study-hub-ci > /dev/null
           for attempt in 1 2; do
             if timeout -k 30 600 npx playwright install --with-deps chromium firefox webkit > "$log" 2>&1; then exit 0; fi
             echo "CI_BROWSER_INSTALL_ATTEMPT_FAILED attempt=$attempt"
             tail -n 40 "$log"
+            # timeout stops npx but not the sudo apt-get it spawned; clear it before retrying.
+            sudo pkill -x apt-get || true
+            sleep 5
+            sudo dpkg --configure -a > /dev/null 2>&1 || true
           done
           echo CI_BROWSER_INSTALL_FAILED; exit 1
       - name: Typecheck and synthetic tests
