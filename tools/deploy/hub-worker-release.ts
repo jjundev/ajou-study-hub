@@ -16,7 +16,7 @@ import { publicProductionUrl, readActiveDeployment, readWorkerTarget, validatePu
 import { readCourseWorkerTarget, parseCourseWorkerSettings, type CourseWorkerSettings } from './course-worker-target.js';
 import { assertProductionRouting, probeCourseFiles } from './course-worker-release.js';
 import { assembleHubArtifact, assertStaticInventory, type StaticArtifact } from './static-worker-baseline.js';
-import { withProfiledWrangler, staticAssets, workerCompatibilityDate, uploadedVersion } from './profiled-wrangler.js';
+import { withProfiledWrangler, staticAssets, workerCompatibilityDate, uploadedVersion, waitForWorkerVersion } from './profiled-wrangler.js';
 
 export function createHubWorkerConfig(profile: StaticWorkerProfile, directory: string) {
   const ids = boundCourseIds(profile);
@@ -83,7 +83,7 @@ export async function releaseProfiledHubWorker(input: HubWorkerReleaseInput): Pr
       await assertHubProfile(previousProfile, settings.productionUrl);
       if (!await sameDeployment(expectedActive)) throw Error('Hub changed before promotion');
       try { await run(['versions', 'deploy', version + '@100%', '--yes']); } catch { /* Reconcile against active state. */ }
-      const deployed = await readActive();
+      const deployed = await waitForWorkerVersion(readActive, expectedActive, version);
       if (deployed.versionId !== version) throw Error('Hub promotion outcome unconfirmed');
       try {
         const probe = anonymousProbe(settings.productionUrl, {});
@@ -114,7 +114,7 @@ export async function releaseProfiledHubWorker(input: HubWorkerReleaseInput): Pr
       } catch {
         if (await sameDeployment(deployed)) {
           await run(['rollback', expectedActive.versionId, '--yes']);
-          if ((await readActive()).versionId !== expectedActive.versionId) throw Error('Hub rollback outcome unconfirmed');
+          if ((await waitForWorkerVersion(readActive, deployed, expectedActive.versionId)).versionId !== expectedActive.versionId) throw Error('Hub rollback outcome unconfirmed');
           throw Error('Hub public verification failed and previous version was restored');
         }
         throw Error('Hub active version changed during verification');
@@ -157,6 +157,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       const artifact = await assembleHubArtifact(dist, manifest, profile, resolve(stage, 'assets'));
       const deployed = await releaseProfiledHubWorker({ ...credentials, project, profile, previousProfile: profile, artifact, expectedActive: active });
       await writeReport({ status: 'verified', profile, active: deployed }, resolve(project, '.reports/hub-receipt.json'));
+      if (profile === 'pilot') {
+        const catalogHash = manifest.outputs.find(file => file.path === 'catalog.json')?.sha256;
+        await writeReport({ schema: 'pilot-hub-baseline-v1', appSha: process.env.GITHUB_SHA, versionId: deployed.versionId,
+          bundleHash: manifest.bundleHash, catalogHash, runId: process.env.GITHUB_RUN_ID,
+          attempt: Number(process.env.GITHUB_RUN_ATTEMPT) }, resolve(project, '.reports/pilot-hub-baseline.json'));
+      }
       console.log(JSON.stringify({ profile, active: deployed }));
     } finally {
       await rm(stage, { recursive: true, force: true });

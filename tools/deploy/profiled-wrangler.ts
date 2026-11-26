@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { build } from 'esbuild';
-import { workerVersionId } from './worker-target.js';
+import { workerVersionId, type ActiveDeployment } from './worker-target.js';
 
 const exec = promisify(execFile);
 export const staticAssets = { binding: 'ASSETS', html_handling: 'none', not_found_handling: '404-page' } as const;
@@ -45,6 +46,16 @@ export async function withProfiledWrangler<T>(project: string, account: string, 
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+export async function waitForWorkerVersion(read: () => Promise<ActiveDeployment>, previous: ActiveDeployment, candidate: string) {
+  let active = await read();
+  for (const wait of [250, 1000, 2000, 4000]) {
+    if (active.versionId === candidate || !isDeepStrictEqual(active, previous)) break;
+    await delay(wait);
+    active = await read();
+  }
+  return active;
 }
 
 export function uploadedVersion(output: string, creating = false): string {

@@ -30,12 +30,12 @@ const types: Record<string, RegExp> = {
 };
 
 export class PublicProbeError extends Error {
-  constructor(message: string, readonly mayBePropagating: boolean) {
+  constructor(message: string, readonly mayBePropagating: boolean, readonly definitive = mayBePropagating) {
     super(message);
   }
 }
-function rejectProbe(path: string, reason: string, mayBePropagating = false): never {
-  throw new PublicProbeError(`Public response for ${path}: ${reason}`, mayBePropagating);
+function rejectProbe(path: string, reason: string, mayBePropagating = false, definitive = mayBePropagating): never {
+  throw new PublicProbeError(`Public response for ${path}: ${reason}`, mayBePropagating, definitive);
 }
 
 export function anonymousProbe(origin: string, options: ProbeOptions) {
@@ -73,10 +73,11 @@ export function anonymousProbe(origin: string, options: ProbeOptions) {
 
 type Probe = ReturnType<typeof anonymousProbe>;
 function assertResponse(response: Response, path: string, expectedStatus: number, typePath = path): void {
-  if (response.status !== expectedStatus) rejectProbe(path, `unexpected HTTP ${response.status}`, expectedStatus === 200 && response.status === 404);
+  if (response.status !== expectedStatus) rejectProbe(path, `unexpected HTTP ${response.status}`, expectedStatus === 200 && response.status === 404,
+    response.status < 500 && !retryStatuses.has(response.status));
   const mime = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
   const expectedMime = types[posix.extname(typePath).toLowerCase()];
-  if (expectedMime && !expectedMime.test(mime)) rejectProbe(path, 'unexpected media type');
+  if (expectedMime && !expectedMime.test(mime)) rejectProbe(path, 'unexpected media type', false, true);
 }
 
 async function streamBody(response: Response, path: string, limit: number, consume: (chunk: Uint8Array) => void) {

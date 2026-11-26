@@ -51,6 +51,10 @@ jobs:
   course:
     needs: dispatch
     if: needs.dispatch.outputs.kind == 'course'
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
     uses: ./.github/workflows/study-hub-course-worker.yml
     with:
       course_id: ${{ needs.dispatch.outputs.course }}
@@ -441,6 +445,14 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
         run: node --import tsx tools/deploy/hub-worker-release.ts
+      - name: Keep the pilot baseline for the full cutover
+        if: ${{ steps.publish-pilot.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pilot-hub-baseline-${{ github.run_attempt }}
+          path: app/.reports/pilot-hub-baseline.json
+          retention-days: 7
+          if-no-files-found: error
       - name: Publish the verified bundle to the public Worker
         id: publish
         if: >-

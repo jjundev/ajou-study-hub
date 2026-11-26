@@ -6,7 +6,8 @@ import { workerVersionId } from '../deploy/worker-target.js';
 
 try {
   const run = JSON.parse(await readFile('.local/cutover/run.json', 'utf8'));
-  const checkpoint = JSON.parse(await readFile('.local/cutover/public-checkpoint.json', 'utf8'));
+  const fromPilot = process.env.BASELINE_KIND === 'pilot';
+  const checkpoint = JSON.parse(await readFile('.local/cutover/' + (fromPilot ? 'pilot-hub-baseline.json' : 'public-checkpoint.json'), 'utf8'));
   const summary = JSON.parse(await readFile('.local/cutover/ci-summary.json', 'utf8'));
   const version = /^\d{1,15}$/.test(process.env.BASELINE_RUN ?? '') && process.env.BASELINE_RUN;
   const attempt = Number(process.env.BASELINE_ATTEMPT);
@@ -17,7 +18,9 @@ try {
       run.head_repository?.full_name !== 'jjundev/ajou-study-hub' || run.conclusion !== 'success' ||
       run.head_sha !== checkpoint.appSha || !/^[a-f0-9]{40}$/.test(run.head_sha) ||
       summary.appSha !== checkpoint.appSha || summary.code !== 'VERIFICATION_PASSED' ||
-      checkpoint.schema !== 3 || checkpoint.runId !== version || checkpoint.attempt !== attempt ||
+      checkpoint.schema !== (fromPilot ? 'pilot-hub-baseline-v1' : 3) ||
+      (fromPilot && (process.env.CUTOVER_PROFILE !== 'all' || checkpoint.catalogHash !== catalogHash)) ||
+      checkpoint.runId !== version || checkpoint.attempt !== attempt ||
       !workerVersionId.test(checkpoint.versionId) || !/^[a-f0-9]{64}$/.test(checkpoint.bundleHash) ||
       Object.keys(summary.sourceShas ?? {}).length !== courseIds.length ||
       courseIds.some(id => !/^[a-f0-9]{40}$/.test(summary.sourceShas[id]))) throw Error();

@@ -20,6 +20,7 @@ on:
 permissions:
   contents: read
   actions: read
+  deployments: write
 jobs:
   course:
     if: >-
@@ -129,7 +130,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           COURSE_BASELINES: ${{ vars.STUDY_HUB_COURSE_WORKER_BASELINES }}
-        run: node --import tsx tools/ci/course-worker-checkpoint.ts
+        run: node --import tsx tools/ci/course-worker-checkpoint.ts load
       - name: Publish only the selected internal Worker
         id: publish-course
         if: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && !inputs.verify_only }}
@@ -140,8 +141,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
         run: node --import tsx tools/deploy/course-worker-release.ts "$COURSE_ID"
-      - name: Save verified course checkpoint
+      - name: Record the verified version in GitHub deployment history
         if: ${{ steps.publish-course.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --import tsx tools/ci/course-worker-checkpoint.ts save
+      - name: Save verified course checkpoint
+        if: ${{ always() && steps.publish-course.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: course-checkpoint-${{ inputs.course_id }}-${{ github.run_attempt }}

@@ -13,7 +13,7 @@ import { writeReport, type BuildReport } from '../content/report.js';
 import { parseCourseWorkerSettings, readCourseWorkerTarget, type CourseWorkerSettings, type CourseWorkerTarget } from './course-worker-target.js';
 import { workerVersionId, publicProductionUrl, readActiveDeployment, validatePublicSettings, type ActiveDeployment, type ReadOptions } from './worker-target.js';
 import { anonymousProbe, encodedPath, PublicProbeError, verifyPublicFiles } from './public-release.js';
-import { withProfiledWrangler, staticAssets, workerCompatibilityDate, uploadedVersion } from './profiled-wrangler.js';
+import { withProfiledWrangler, staticAssets, workerCompatibilityDate, uploadedVersion, waitForWorkerVersion } from './profiled-wrangler.js';
 import type { Catalog } from '../../src/content/model.js';
 
 type Fingerprint = Pick<CourseWorkerProof, 'bundleHash' | 'catalogHash' | 'sourceSha'>;
@@ -63,8 +63,11 @@ export async function probeCourseFiles(origin: string, courseId: CourseId, catal
   const probe = anonymousProbe(origin, { fetch: request });
   try {
     const matches = await probe('/catalog.json', async response => {
-      if (!response.ok) throw Error('Public catalog unavailable');
-      const value: unknown = await response.json();
+      if (!response.ok) {
+        if (response.status < 500 && ![408, 429].includes(response.status)) return false;
+        throw Error('Public catalog unavailable');
+      }
+      const value: unknown = await response.json().catch(() => undefined);
       return isCatalog(value) && isDeepStrictEqual(catalogSlice(value, courseId), catalogSlice(catalog, courseId));
     });
     if (!matches) return false;
@@ -72,7 +75,7 @@ export async function probeCourseFiles(origin: string, courseId: CourseId, catal
       .map(row => ({ row, path: encodedPath(row.path) })));
     return true;
   } catch (error) {
-    if (error instanceof PublicProbeError && error.mayBePropagating) return false;
+    if (error instanceof PublicProbeError && error.definitive) return false;
     throw error;
   }
 }
@@ -121,27 +124,28 @@ export async function publishCourseVersion(input: PublishOptions): Promise<Cours
   } catch {
     // The provider may have accepted the promotion before the command failed.
   }
-  const deployed = await reread().catch(() => undefined);
-  if (deployed?.active.versionId !== candidateVersionId) return unknown(deployed?.active);
+  const readActive = async () => (await reread()).active;
+  const deployed = await waitForWorkerVersion(readActive, before.active, candidateVersionId).catch(() => undefined);
+  if (deployed?.versionId !== candidateVersionId) return unknown(deployed);
   try {
     if (await input.probe()) {
       const verified = await reread();
-      if (!isDeepStrictEqual(verified.active, deployed.active)) return unknown(verified.active);
+      if (!isDeepStrictEqual(verified.active, deployed)) return unknown(verified.active);
       return { ...base, status: 'verified', candidateVersionId, active: verified.active,
         checkpoint: { courseId: input.courseId, workerId: target.workerId, versionId: candidateVersionId, ...input.proof } };
     }
   } catch {
-    return unknown(deployed.active);
+    return unknown(deployed);
   }
   const current = await reread().catch(() => undefined);
-  if (!current || !knownCheckpoint(input, target) || !isDeepStrictEqual(current.active, deployed.active)) return unknown(current?.active);
+  if (!current || !knownCheckpoint(input, target) || !isDeepStrictEqual(current.active, deployed)) return unknown(current?.active);
   try {
     await input.checkRouting();
-    if (!isDeepStrictEqual((await reread()).active, deployed.active)) return unknown();
+    if (!isDeepStrictEqual((await reread()).active, deployed)) return unknown();
     await input.rollback(target, previousVersionId);
-    const restored = await reread();
-    if (restored.active.versionId === previousVersionId && await input.probePrevious(input.checkpoint)) return { ...base, status: 'rolled-back', candidateVersionId, active: restored.active, checkpoint: input.checkpoint };
-    return unknown(restored.active);
+    const restored = await waitForWorkerVersion(readActive, deployed, previousVersionId);
+    if (restored.versionId === previousVersionId && await input.probePrevious(input.checkpoint)) return { ...base, status: 'rolled-back', candidateVersionId, active: restored, checkpoint: input.checkpoint };
+    return unknown(restored);
   } catch {
     return unknown((await reread().catch(() => undefined))?.active);
   }
@@ -194,8 +198,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     validatePublicSettings(hub);
     if (hub.accountId !== settings.accountId || !process.env.CLOUDFLARE_READ_TOKEN ||
         input.snapshot.appSha !== process.env.GITHUB_SHA) throw Error();
-    let checkpoint: CourseWorkerCheckpoint | undefined;
-    try { checkpoint = JSON.parse(await readFile(resolve(input.project, '.local/course-checkpoint.json'), 'utf8')); }
+    let checkpoints: CourseWorkerCheckpoint[] = [];
+    try {
+      const rows: unknown = JSON.parse(await readFile(resolve(input.project, '.local/course-checkpoints.json'), 'utf8'));
+      if (!Array.isArray(rows)) throw Error();
+      checkpoints = rows;
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     const profile = workerProfile(process.env.STUDY_HUB_STATIC_WORKER_PROFILE);
     const readOptions = { token: process.env.CLOUDFLARE_READ_TOKEN };
@@ -208,6 +216,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       return { hub: hubVersion.versionId, courses: Object.fromEntries(courses) };
     };
     const before = await snapshotVersions().catch(() => undefined);
+    const selected = await readCourseWorkerTarget(id, settings, readOptions);
+    const checkpoint = checkpoints.find(row => row.courseId === id && row.workerId === selected.workerId && row.versionId === selected.active.versionId);
     const receipt = await releaseCourseWorker({ ...input, proof, settings, checkpoint,
       profile, token: process.env.CLOUDFLARE_API_TOKEN, readOptions });
     const after = await snapshotVersions().catch(() => undefined);

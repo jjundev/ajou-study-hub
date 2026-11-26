@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { readCourseWorkerTarget } from '../../tools/deploy/course-worker-target.js';
-import { assertProductionRouting, publishCourseVersion } from '../../tools/deploy/course-worker-release.js';
+import { assertProductionRouting, probeCourseFiles, publishCourseVersion } from '../../tools/deploy/course-worker-release.js';
+import { waitForWorkerVersion } from '../../tools/deploy/profiled-wrangler.js';
 import { publicProductionUrl } from '../../tools/deploy/worker-target.js';
 
 const settings = { accountId: 'a'.repeat(32), workerIds: { 'life-science': 'b'.repeat(32) } };
@@ -61,4 +62,26 @@ test('rejects routing drift before any upload', async () => {
   const request = async () => Response.json({ schema: 1, profile: 'pilot', courseIds: ['life-science'] });
   await expect(assertProductionRouting('all', publicProductionUrl, request)).rejects.toThrow('Production routing');
   await expect(assertProductionRouting('pilot', publicProductionUrl, request)).resolves.toBeUndefined();
+});
+
+test('identifies definitive media failures while leaving temporary gateway failures uncertain', async () => {
+  const catalog = {
+    version: 1 as const,
+    courses: [{ id: 'life-science', name: 'Life Science', repo: 'example/repo', semester: '2026-2' as const }],
+    groups: [], documents: [],
+  };
+  const outputs = [{ path: 'content/life-science/handout.pdf', sha256: 'a'.repeat(64), size: 0 }];
+  const probe = (file: Response) => async (url: RequestInfo | URL) =>
+    String(url).endsWith('/catalog.json') ? Response.json(catalog) : file.clone();
+  await expect(probeCourseFiles(publicProductionUrl, 'life-science', catalog, outputs,
+    probe(new Response(null, { headers: { 'content-type': 'text/html' } })))).resolves.toBe(false);
+  await expect(probeCourseFiles(publicProductionUrl, 'life-science', catalog, outputs,
+    probe(new Response(null, { status: 503 })))).rejects.toThrow('unexpected HTTP 503');
+});
+
+test('waits for promotion while the recorded previous deployment remains active', async () => {
+  const promoted = { deploymentId: candidate, versionId: candidate };
+  let reads = 0;
+  await expect(waitForWorkerVersion(async () => reads++ ? promoted : active, active, candidate)).resolves.toEqual(promoted);
+  expect(reads).toBe(2);
 });

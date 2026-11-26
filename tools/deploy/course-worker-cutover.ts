@@ -10,7 +10,7 @@ import { anonymousProbe, verifyPublicDeployment } from './public-release.js';
 import { probeCourseFiles, type CourseWorkerCheckpoint } from './course-worker-release.js';
 import { readCourseWorkerTarget } from './course-worker-target.js';
 import { assertHubProfile, profiledReleaseSettings, readPublicCatalog, releaseProfiledHubWorker } from './hub-worker-release.js';
-import { deriveStaticWorkerBaseline, seedCourseWorker, type VerifiedPublicBaseline } from './static-worker-baseline.js';
+import { assembleHubArtifact, deriveStaticWorkerBaseline, seedCourseWorker, type VerifiedPublicBaseline } from './static-worker-baseline.js';
 import { readActiveDeployment, readWorkerTarget } from './worker-target.js';
 
 let phase = 'configuration';
@@ -99,7 +99,9 @@ async function runCutover() {
       }
     };
     phase = 'publish-hub';
-    const deployed = await releaseProfiledHubWorker({ project, profile, previousProfile: previous, artifact: baseline.hub, settings,
+    const hubArtifact = profile === 'pilot' ? baseline.hub : await assembleHubArtifact(resolve(project, 'dist'),
+      JSON.parse(await readFile('.reports/app-build.json', 'utf8')) as BuildReport, profile, resolve(stage, 'hub-ui'));
+    const deployed = await releaseProfiledHubWorker({ project, profile, previousProfile: previous, artifact: hubArtifact, settings,
       courseSettings: { accountId: settings.accountId, workerIds: existing }, token, readOptions, expectedActive: active, verifyPublic });
     Object.assign(checkpoints, seeds);
     await writeReport({ profile, settings: { accountId: settings.accountId, workerIds: existing }, checkpoints, previous: active, active: deployed },
