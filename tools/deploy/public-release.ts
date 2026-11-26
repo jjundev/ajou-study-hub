@@ -29,7 +29,7 @@ const types: Record<string, RegExp> = {
   '.eot': /^application\/vnd\.ms-fontobject$/,
 };
 
-class PublicProbeError extends Error {
+export class PublicProbeError extends Error {
   constructor(message: string, readonly mayBePropagating: boolean) {
     super(message);
   }
@@ -38,7 +38,7 @@ function rejectProbe(path: string, reason: string, mayBePropagating = false): ne
   throw new PublicProbeError(`Public response for ${path}: ${reason}`, mayBePropagating);
 }
 
-function anonymousProbe(origin: string, options: ProbeOptions) {
+export function anonymousProbe(origin: string, options: ProbeOptions) {
   const base = URL.parse(origin);
   if (base?.origin !== origin || base.protocol !== 'https:') throw Error('Public verification requires an HTTPS origin');
   const timeout = options.timeoutMs ?? 30000;
@@ -99,7 +99,7 @@ async function streamBody(response: Response, path: string, limit: number, consu
   return size;
 }
 
-async function checkRoot(origin: string, probe: Probe) {
+export async function checkRoot(origin: string, probe: Probe) {
   await probe('/', response => {
     const location = response.headers.get('location');
     if (response.status !== 302 || !location || URL.parse(location, origin)?.href !== origin + '/index.html')
@@ -107,7 +107,7 @@ async function checkRoot(origin: string, probe: Probe) {
   });
 }
 
-function encodedPath(path: string) {
+export function encodedPath(path: string) {
   const parts = path.split('/');
   if (parts.some(part => !part || part === '.' || part === '..' || /[\\\u0000-\u001f]/.test(part)))
     throw Error('Invalid public manifest path');
@@ -130,6 +130,10 @@ export async function verifyPublicDeployment(
     return { row, path: row.path === '404.html' ? missing : encodedPath(row.path) };
   });
   await checkRoot(productionUrl, probe);
+  return verifyPublicFiles(probe, checks);
+}
+
+export async function verifyPublicFiles(probe: Probe, checks: { row: Output; path: string }[]) {
   const check = async (row: Output, path: string) => {
     await probe(path, async response => {
       assertResponse(response, path, row.path === '404.html' ? 404 : 200, row.path);

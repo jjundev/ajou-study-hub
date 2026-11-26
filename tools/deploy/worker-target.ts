@@ -114,8 +114,17 @@ export async function readActiveDeployment(target: TargetInput, options: ReadOpt
   try {
     validateWorkerTarget(target);
     if ('workerId' in target) validatePublicSettings(target);
+    return await readScriptDeployment(target.accountId, target.workerName, options);
+  } catch {
+    throw Error('Cloudflare active Worker version could not be verified');
+  }
+}
+
+export async function readScriptDeployment(accountId: string, name: string, options: ReadOptions = {}): Promise<ActiveDeployment> {
+  try {
+    if (!hexId.test(accountId) || !/^[a-z0-9-]+$/.test(name)) return fail();
     const get = cloudflareReader(options);
-    const envelope = await get(`/accounts/${target.accountId}/workers/scripts/${target.workerName}/deployments`);
+    const envelope = await get(`/accounts/${accountId}/workers/scripts/${name}/deployments`);
     if (!hasOnly(envelope, ['success', 'errors', 'messages', 'result', 'result_info']) ||
         !Array.isArray(envelope.errors) || envelope.errors.length ||
         (envelope.messages !== undefined && !Array.isArray(envelope.messages))) return fail();
