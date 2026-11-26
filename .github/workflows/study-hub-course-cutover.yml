@@ -33,7 +33,7 @@ jobs:
       github.workflow_sha == github.sha &&
       (inputs.verify_only || vars.STUDY_HUB_AUTOMATIC_UPDATES == 'disabled')
     concurrency:
-      group: study-hub-production
+      group: ${{ inputs.verify_only && 'study-hub-baseline-verification' || 'study-hub-production' }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 55

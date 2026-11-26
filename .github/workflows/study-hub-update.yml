@@ -64,7 +64,7 @@ jobs:
     needs: dispatch
     if: needs.dispatch.outputs.kind == 'legacy' || needs.dispatch.outputs.source_mode == 'legacy-bundle'
     concurrency:
-      group: study-hub-production
+      group: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && 'study-hub-production' || format('study-hub-verify-{0}', github.run_id) }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -630,7 +630,7 @@ jobs:
     needs: dispatch
     if: needs.dispatch.outputs.source_mode == 'ui-only'
     concurrency:
-      group: study-hub-production
+      group: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && 'study-hub-production' || format('study-hub-verify-{0}', github.run_id) }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 40

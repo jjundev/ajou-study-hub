@@ -9,7 +9,8 @@ const load=async()=>parse(await readFile(new URL('../../.github/workflows/study-
 const exec=promisify(execFile);
 test('default_disabled_has_no_early_cloud_credentials and serializes production work',async()=>{
  const workflow=await load(),job=workflow.jobs.verify;
- expect(job.concurrency).toEqual({group:'study-hub-production','cancel-in-progress':false});
+ expect(job.concurrency.group).toContain("'study-hub-production'");
+ expect(job.concurrency['cancel-in-progress']).toBe(false);
  expect(workflow.on.push.branches).toEqual(['main']);
  expect(Object.keys(workflow.on).sort()).toEqual(['push','workflow_dispatch']);
  expect(workflow.on.workflow_dispatch.inputs.mode.default).toBe('default');
