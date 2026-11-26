@@ -71,8 +71,8 @@ jobs:
           gh api "repos/jjundev/ajou-study-hub/actions/runs/$BASELINE_RUN" > .local/cutover/run.json
           metadata=verify-metadata
           if [[ "$BASELINE_ATTEMPT" != 1 ]]; then metadata="verify-metadata-$BASELINE_ATTEMPT"; fi
-          gh run download "$BASELINE_RUN" -R jjundev/ajou-study-hub -n "$metadata" -d .local/cutover
-          gh run download "$BASELINE_RUN" -R jjundev/ajou-study-hub -n "public-checkpoint-$BASELINE_ATTEMPT" -d .local/cutover
+          gh run download "$BASELINE_RUN" -R jjundev/ajou-study-hub -n "$metadata" --dir .local/cutover
+          gh run download "$BASELINE_RUN" -R jjundev/ajou-study-hub -n "public-checkpoint-$BASELINE_ATTEMPT" --dir .local/cutover
           node --import tsx tools/ci/prepare-course-cutover.ts
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:

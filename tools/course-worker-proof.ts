@@ -1,6 +1,7 @@
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { CourseId } from '../config/course-workers.js';
+import { contentUrl } from '../src/content/model.js';
 import { isCatalog } from '../src/content/catalog-validation.js';
 import { readCourseSnapshot } from './ci/course-source.js';
 import type { SourceSnapshot } from './ci/sources.js';
@@ -43,7 +44,7 @@ export async function inspectCourseArtifact(outputDir: string, courseId: CourseI
     throw Error('Course catalog has wrong owner');
   }
   const files = new Set(outputs.map(file => file.path));
-  if (catalog.documents.some(doc => !files.has(decodeURIComponent(doc.url).slice(1))) ||
+  if (catalog.documents.some(doc => doc.url !== contentUrl(courseId, doc.sourcePath) || !files.has(decodeURIComponent(doc.url).slice(1))) ||
       catalog.groups.some(group => [...group.reviewPdfs ?? [], ...group.answerPdfs ?? []]
         .some(path => !files.has(prefix + path.normalize('NFC'))))) {
     throw Error('Course catalog references a missing asset');

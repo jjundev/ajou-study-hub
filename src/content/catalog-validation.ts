@@ -1,5 +1,5 @@
 import { documentUrl } from '../app/router.js';
-import { contentUrl, materialTypes, type Catalog, type DocumentInfo } from './model.js';
+import { materialTypes, type Catalog, type DocumentInfo } from './model.js';
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 const strings = (value: Record<string, unknown>, keys: string[]) => keys.every(key => typeof value[key] === 'string');
 function validPdfPaths(value: unknown, groupPath: string): boolean {
@@ -19,7 +19,7 @@ export function isCatalog(value: unknown): value is Catalog {
   const groupIds = new Set(groups.map(g => g.id));
   if (groupIds.size !== groups.length) return false;
   const groupCourses = new Map(groups.map(g => [g.id, g.courseId]));
-  return docs.every(d => record(d) && strings(d, ['id', 'courseId', 'title', 'sourcePath', 'url']) && courseIds.has(d.courseId) && (d.groupId === null || (groupIds.has(d.groupId) && groupCourses.get(d.groupId) === d.courseId)) && (materialTypes as readonly string[]).includes(d.type as string) && typeof d.listed === 'boolean' && documentUrl(d as DocumentInfo, 'https://catalog.invalid/') !== null && d.url === contentUrl(d.courseId as string, d.sourcePath as string)) && new Set(docs.map(d => d.id)).size === docs.length;
+  return docs.every(d => record(d) && strings(d, ['id', 'courseId', 'title', 'sourcePath', 'url']) && courseIds.has(d.courseId) && (d.groupId === null || (groupIds.has(d.groupId) && groupCourses.get(d.groupId) === d.courseId)) && (materialTypes as readonly string[]).includes(d.type as string) && typeof d.listed === 'boolean' && documentUrl(d as DocumentInfo, 'https://catalog.invalid/') !== null) && new Set(docs.map(d => d.id)).size === docs.length;
 }
 
 export function catalogSlice(catalog: Catalog, id: string): Catalog {

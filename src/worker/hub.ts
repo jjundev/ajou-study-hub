@@ -1,6 +1,6 @@
 import { boundCourseIds, courseIds, courseWorkers, isCourseId, type CourseId, type StaticWorkerProfile } from '../../config/course-workers.js';
 import { catalogSlice, isCatalog, mergeCatalogs } from '../content/catalog-validation.js';
-import type { Catalog } from '../content/model.js';
+import { contentUrl, type Catalog } from '../content/model.js';
 
 export type AssetBinding = { fetch(request: Request): Promise<Response> };
 export type HubWorkerEnv = {
@@ -44,7 +44,8 @@ export async function serveHubRequest(request: Request, env: HubWorkerEnv): Prom
     const slices = await Promise.allSettled(courseIds.map(async id => {
       if (!bound.includes(id)) return catalogSlice(await staticCatalog!, id);
       const catalog = await readCatalog(env[courseWorkers[id].binding], url);
-      if (catalog.courses.length !== 1 || catalog.courses[0]?.id !== id) throw Error('Wrong catalog owner');
+      if (catalog.courses.length !== 1 || catalog.courses[0]?.id !== id ||
+          catalog.documents.some(doc => doc.url !== contentUrl(id, doc.sourcePath))) throw Error('Wrong catalog owner');
       return catalogSlice(catalog, id);
     }));
     const catalog = mergeCatalogs(slices.flatMap(slice => slice.status === 'fulfilled' ? [slice.value] : []));
