@@ -9,7 +9,7 @@ const load=async()=>parse(await readFile(new URL('../../.github/workflows/study-
 const exec=promisify(execFile);
 test('default_disabled_has_no_early_cloud_credentials and serializes production work',async()=>{
  const workflow=await load(),job=workflow.jobs.verify;
- expect(workflow.concurrency).toEqual({group:'study-hub-production','cancel-in-progress':false});
+ expect(job.concurrency).toEqual({group:'study-hub-production','cancel-in-progress':false});
  expect(workflow.on.push.branches).toEqual(['main']);
  expect(Object.keys(workflow.on).sort()).toEqual(['push','workflow_dispatch']);
  expect(workflow.on.workflow_dispatch.inputs.mode.default).toBe('default');
@@ -53,7 +53,7 @@ test('app and five sources use fixed SHA refs without persisted credentials',asy
  for(const step of checkouts.slice(1)){expect(step.with.ref).toMatch(/^\$\{\{ steps\.revisions\.outputs\.[a-z_0-9]+ \}\}$/);expect(step.with.path).toMatch(/^sources\//);}
  const revoke=steps.findIndex((s:any)=>s.id==='revoke-reader'),browser=steps.findIndex((s:any)=>s.id==='browsers');
  expect(revoke).toBeGreaterThan(steps.indexOf(checkouts.at(-1)));expect(browser).toBeGreaterThan(revoke);
- for(const step of steps.slice(revoke+1)){expect(JSON.stringify(step.env??{})).not.toMatch(/reader\.outputs\.token|LEDGER/);if(!['compare-public-inputs','publish'].includes(step.id))expect(JSON.stringify(step.env??{})).not.toContain('secrets.');}
+ for(const step of steps.slice(revoke+1)){expect(JSON.stringify(step.env??{})).not.toMatch(/reader\.outputs\.token|LEDGER/);if(!['compare-public-inputs','publish-pilot','publish'].includes(step.id))expect(JSON.stringify(step.env??{})).not.toContain('secrets.');}
 });
 
 test('sources use trusted generated exact non-cone selection and bounded checks before binding',async()=>{
@@ -137,9 +137,11 @@ test('source scripts are never invoked and both material commands use explicit s
  expect(commands).not.toMatch(/(?:cd|npm\s+--prefix|bash|sh)\s+[^\n]*sources\//);
  expect(commands).toContain('npm run build -- --sources .local/ci-sources.json');
  expect(commands).toContain('node --import tsx tools/ci/verify-material.ts');
- expect(job.if).toContain("github.repository == 'jjundev/ajou-study-hub'");
- expect(job.if).toContain("github.ref == 'refs/heads/main'");
- expect(job.if).toContain('github.workflow_sha == github.sha');
+ const guard = (await load()).jobs.dispatch.if;
+ expect(job.needs).toBe('dispatch');
+ expect(guard).toContain("github.repository == 'jjundev/ajou-study-hub'");
+ expect(guard).toContain("github.ref == 'refs/heads/main'");
+ expect(guard).toContain('github.workflow_sha == github.sha');
 });
 test('native workflow boundary rejects credential helper in source checkout without leaking its value',async()=>{
  const root=await mkdtemp(join(tmpdir(),'hub-source-credential-'));
@@ -191,8 +193,8 @@ test('status metadata hydration uses scoped Reader before unconditional revocati
 
 test('secrets and receipt handling remain bound to their steps',async()=>{
  const steps=(await load()).jobs.verify.steps,publish=steps.find((s:any)=>s.id==='publish'),boundary=steps.findIndex((s:any)=>s.id==='boundary');
- expect(steps.filter((s:any)=>s.env?.CLOUDFLARE_API_TOKEN).map((s:any)=>s.id)).toEqual(['publish']);
- expect(steps.filter((s:any)=>s.env?.CLOUDFLARE_READ_TOKEN).map((s:any)=>s.id)).toEqual(['compare-public-inputs','publish']);
+ expect(steps.filter((s:any)=>s.env?.CLOUDFLARE_API_TOKEN).map((s:any)=>s.id)).toEqual(['publish-pilot','publish']);
+ expect(steps.filter((s:any)=>s.env?.CLOUDFLARE_READ_TOKEN).map((s:any)=>s.id)).toEqual(['compare-public-inputs','publish-pilot','publish']);
  const compare=steps.find((s:any)=>s.id==='compare-public-inputs');
  expect(steps.indexOf(compare)).toBeGreaterThan(steps.findIndex((s:any)=>s.id==='source-limits'));
  expect(compare.env.GH_TOKEN).toBe('${{ github.token }}');
@@ -202,7 +204,7 @@ test('secrets and receipt handling remain bound to their steps',async()=>{
  expect(publish.env).toEqual({STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS:'${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}',CLOUDFLARE_API_TOKEN:'${{ secrets.CLOUDFLARE_API_TOKEN }}',CLOUDFLARE_READ_TOKEN:'${{ secrets.CLOUDFLARE_READ_TOKEN }}',COURSE_RELEASE:permit});
  expect(steps.find((s:any)=>s.name==='Build and verify the same pinned material checkout').env).toEqual({
   COURSE_RELEASE:permit,
-  RECORD_DOCUMENT_TRANSFORMS:"${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' }}",
+  RECORD_DOCUMENT_TRANSFORMS:"${{ needs.dispatch.outputs.kind == 'legacy' && vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' }}",
  });
  expect(publish.run).toContain('validatePublicSettings(settings)');
  expect(publish.run).toContain("writeFile('.local/public-deployment.json'");
@@ -261,6 +263,7 @@ test('only eligible course updates may skip expensive steps', async () => {
    STUDY_HUB_COURSE_VERIFICATION:row.coursePolicy ?? '', STUDY_HUB_DOCUMENT_TRANSFORM_REUSE:row.transformPolicy ?? '' };
   const inputs = { mode:row.mode ?? 'default', source_repository:row.source ?? course };
   const github = { event_name:row.event ?? 'workflow_dispatch' };
+  const needs = { dispatch: { outputs: { kind: 'legacy', source_mode: '' } } };
   const known: Record<string,{outputs:Record<string,string>;outcome?:string}> = {};
   const outcomes = new Map();
   for (const step of steps) {
@@ -269,8 +272,8 @@ test('only eligible course updates may skip expensive steps', async () => {
     const expr = step.if.trim().slice(3,-2)
      .replace(/steps\.([a-z-]+)(?:\.outputs)?\.([a-z_]+)/g, (_:string, id:string, key:string) =>
       JSON.stringify(known[id]?.outputs[key] ?? (key==='outcome' ? known[id]?.outcome : undefined) ?? ''));
-    run = (expr.includes('always()') || success) && new Function('success','always','vars','inputs','github',
-     'return ('+expr+')')(() => success,() => true,vars,inputs,github);
+    run = (expr.includes('always()') || success) && new Function('success','always','vars','inputs','github','needs',
+     'return ('+expr+')')(() => success,() => true,vars,inputs,github,needs);
    }
    outcomes.set(step.id ?? step.name, run);
    if (step.id) known[step.id] = {outcome:run ? 'success' : 'skipped',outputs:{}};

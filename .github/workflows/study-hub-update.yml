@@ -16,17 +16,56 @@ on:
 permissions:
   contents: read
   actions: read
-concurrency:
-  group: study-hub-production
-  cancel-in-progress: false
 jobs:
-  verify:
+  dispatch:
     if: >-
       github.repository == 'jjundev/ajou-study-hub' &&
       github.ref == 'refs/heads/main' &&
       github.workflow_ref == 'jjundev/ajou-study-hub/.github/workflows/study-hub-update.yml@refs/heads/main' &&
       github.workflow_sha == github.sha &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    outputs:
+      kind: ${{ steps.lane.outputs.kind }}
+      profile: ${{ steps.lane.outputs.profile }}
+      course: ${{ steps.lane.outputs.courseId }}
+      source_mode: ${{ steps.lane.outputs.sourceMode }}
+      verify_only: ${{ steps.lane.outputs.verifyOnly }}
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+          package-manager-cache: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - id: lane
+        env:
+          MODE: ${{ inputs.mode }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          STUDY_HUB_STATIC_WORKER_PROFILE: ${{ vars.STUDY_HUB_STATIC_WORKER_PROFILE }}
+        run: node --import tsx tools/ci/update-lane.ts
+  course:
+    needs: dispatch
+    if: needs.dispatch.outputs.kind == 'course'
+    uses: ./.github/workflows/study-hub-course-worker.yml
+    with:
+      course_id: ${{ needs.dispatch.outputs.course }}
+      verify_only: ${{ needs.dispatch.outputs.verify_only == 'true' }}
+    secrets:
+      STUDY_HUB_READER_APP_ID: ${{ secrets.STUDY_HUB_READER_APP_ID }}
+      STUDY_HUB_READER_PRIVATE_KEY: ${{ secrets.STUDY_HUB_READER_PRIVATE_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+  verify:
+    needs: dispatch
+    if: needs.dispatch.outputs.kind == 'legacy' || needs.dispatch.outputs.source_mode == 'legacy-bundle'
+    concurrency:
+      group: study-hub-production
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -186,7 +225,7 @@ jobs:
       - name: Fingerprint the pinned public inputs
         id: fingerprint-public-inputs
         if: >-
-          ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
+          ${{ needs.dispatch.outputs.kind == 'legacy' && vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
               (vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'observe' || vars.STUDY_HUB_UNCHANGED_DEPLOYMENTS == 'skip' ||
                vars.STUDY_HUB_COURSE_VERIFICATION == 'observe' || vars.STUDY_HUB_COURSE_VERIFICATION == 'apply' ||
                vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe') }}
@@ -264,7 +303,7 @@ jobs:
         if: ${{ steps.skip-public-deployment.outputs.skip != 'true' }}
         env:
           COURSE_RELEASE: ${{ steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.course_release || '' }}
-          RECORD_DOCUMENT_TRANSFORMS: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' }}
+          RECORD_DOCUMENT_TRANSFORMS: ${{ needs.dispatch.outputs.kind == 'legacy' && vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' && vars.STUDY_HUB_DOCUMENT_TRANSFORM_REUSE == 'observe' }}
         run: |
           build_started_at="$(date +%s%3N)"
           if ! npm run build -- --sources .local/ci-sources.json > /dev/null 2>&1; then
@@ -391,10 +430,21 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: false
+      - name: Publish the verified four-course pilot hub
+        id: publish-pilot
+        if: ${{ needs.dispatch.outputs.source_mode == 'legacy-bundle' && vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' }}
+        env:
+          STUDY_HUB_AUTOMATIC_UPDATES: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES }}
+          STUDY_HUB_STATIC_WORKER_PROFILE: pilot
+          STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
+          STUDY_HUB_COURSE_WORKER_SETTINGS: ${{ vars.STUDY_HUB_COURSE_WORKER_SETTINGS }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+        run: node --import tsx tools/deploy/hub-worker-release.ts
       - name: Publish the verified bundle to the public Worker
         id: publish
         if: >-
-          ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
+          ${{ needs.dispatch.outputs.kind == 'legacy' && vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' &&
               steps.skip-public-deployment.outputs.skip != 'true' }}
         env:
           STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
@@ -402,6 +452,11 @@ jobs:
           CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
           COURSE_RELEASE: ${{ steps.compare-public-inputs.outcome == 'success' && steps.compare-public-inputs.outputs.course_release || '' }}
         run: |
+          node --import tsx --input-type=module <<'LEGACY'
+          import { assertHubProfile } from './tools/deploy/hub-worker-release.ts';
+          import { publicProductionUrl } from './tools/deploy/worker-target.ts';
+          await assertHubProfile('legacy', publicProductionUrl);
+          LEGACY
           node --import tsx --input-type=module <<'NODE'
           import { lstat, writeFile } from 'node:fs/promises';
           import { validatePublicSettings } from './tools/deploy/worker-target.ts';
@@ -571,3 +626,45 @@ jobs:
             echo 'Document HTML/CSS reuse (observe) · unavailable' >> "$GITHUB_STEP_SUMMARY"
             echo '::warning::CI_DOCUMENT_TRANSFORM_OBSERVATION_UNAVAILABLE'
           fi
+  hub-ui:
+    needs: dispatch
+    if: needs.dispatch.outputs.source_mode == 'ui-only'
+    concurrency:
+      group: study-hub-production
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+          package-manager-cache: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+      - run: node tools/ci/source-git-environment.ts
+      - run: node tools/ci/process-boundary.ts capture "$RUNNER_TEMP/study-hub-trusted.json"
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck && npm test -- --maxWorkers=1
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run test:e2e -- --reporter=line
+      - run: npm run build -- --ui-only
+      - run: node tools/ci/process-boundary.ts check "$RUNNER_TEMP/study-hub-trusted.json"
+      - name: Publish hub UI with all five bindings
+        if: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' }}
+        env:
+          STUDY_HUB_AUTOMATIC_UPDATES: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES }}
+          STUDY_HUB_STATIC_WORKER_PROFILE: all
+          STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
+          STUDY_HUB_COURSE_WORKER_SETTINGS: ${{ vars.STUDY_HUB_COURSE_WORKER_SETTINGS }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+        run: node --import tsx tools/deploy/hub-worker-release.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES == 'enabled' && inputs.mode != 'verify' }}
+        with:
+          name: hub-release-${{ github.run_attempt }}
+          path: .reports/hub-receipt.json
+          retention-days: 14
