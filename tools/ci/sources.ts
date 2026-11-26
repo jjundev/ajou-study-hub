@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { courses } from '../../config/courses.js';
+import { courses, type CourseConfig } from '../../config/courses.js';
 import { inspectBoundSources } from '../source-binding.js';
 export type Revision = {courseId:string; repository:string; sha:string; root:string};
 export type SourceSnapshot = {version:1; appSha:string; revisions:Revision[]; inputFingerprint:string; settingsPath:string};
@@ -56,10 +56,10 @@ async function gitStatus(root:string,courseId:string){
   throw failure;
  }
 }
-export async function resolveRevisions(request:typeof fetch,token:string):Promise<Omit<Revision,'root'>[]>{
+export async function resolveRevisions(request:typeof fetch,token:string, configs: readonly CourseConfig[] = courses):Promise<Omit<Revision,'root'>[]>{
  if(!token.trim())throw Error('Source read token required');
  const revisions:Omit<Revision,'root'>[]=[];
- for(const course of courses){
+ for(const course of configs){
   let response:Response;
   try{response=await request(`https://api.github.com/repos/${course.repo}/git/ref/heads/main`,{redirect:'error',headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}});}
   catch{throw Error('Source revision request failed');}
@@ -70,10 +70,10 @@ export async function resolveRevisions(request:typeof fetch,token:string):Promis
  }
  return revisions;
 }
-function validatedRevisions(value:unknown):Revision[]{
- if(!Array.isArray(value)||value.length!==courses.length)throw new SourceBindError('CI_BIND_REVISIONS_INVALID','Exactly five sources required');
+function validatedRevisions(value:unknown, configs: readonly CourseConfig[]):Revision[]{
+ if(!Array.isArray(value)||value.length!==configs.length)throw new SourceBindError('CI_BIND_REVISIONS_INVALID','Unexpected source count');
  const result:Revision[]=[];
- for(const course of courses){
+ for(const course of configs){
   const matches=value.filter(r=>record(r)&&r.courseId===course.id);
   if(matches.length!==1)throw new SourceBindError('CI_BIND_REVISIONS_INVALID','Missing or duplicate source');
   const revision=matches[0];
@@ -90,9 +90,9 @@ async function outputPath(project:string,directory:string){
  catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
  return target;
 }
-export async function bindSources(project:string,appSha:string,revisions:Revision[]):Promise<SourceSnapshot>{
+export async function bindSources(project:string,appSha:string,revisions:Revision[], configs: readonly CourseConfig[] = courses):Promise<SourceSnapshot>{
  if(typeof appSha!=='string'||!shaPattern.test(appSha))throw new SourceBindError('CI_BIND_APP_SHA_INVALID','Invalid app SHA');
- const projectRoot=await bindingStage('CI_BIND_PROJECT_ROOT_FAILED','Cannot inspect project root',undefined,()=>realpath(project)),ordered=validatedRevisions(revisions),roots=new Set<string>();
+ const projectRoot=await bindingStage('CI_BIND_PROJECT_ROOT_FAILED','Cannot inspect project root',undefined,()=>realpath(project)),ordered=validatedRevisions(revisions, configs),roots=new Set<string>();
  for(const revision of ordered){
   const root=await bindingStage('CI_BIND_ROOT_FAILED','Invalid source root ownership',revision.courseId,async()=>{
    const requested=resolve(projectRoot,revision.root),root=await realpath(requested);
@@ -111,7 +111,7 @@ export async function bindSources(project:string,appSha:string,revisions:Revisio
  }
  const [settingsPath,reportPath]=await bindingStage('CI_BIND_OUTPUT_FAILED','Unsafe CI output directory or file',undefined,async()=>[await outputPath(projectRoot,'.local'),await outputPath(projectRoot,'.reports')] as const);
  await bindingStage('CI_BIND_OUTPUT_FAILED','Cannot write CI source settings',undefined,()=>writeFile(settingsPath,JSON.stringify({roots:Object.fromEntries(ordered.map(r=>[r.courseId,r.root])),explicitUntracked:{}},null,2)+'\n'));
- const inspected=await bindingStage('CI_BIND_INSPECTION_FAILED','Cannot inspect bound sources',undefined,()=>inspectBoundSources(projectRoot,settingsPath));
+ const inspected=await bindingStage('CI_BIND_INSPECTION_FAILED','Cannot inspect bound sources',undefined,()=>inspectBoundSources(projectRoot,settingsPath,configs));
  const changed=inspected.snapshot.provenance.find(p=>p.dirty||p.commit!==ordered.find(r=>r.courseId===p.courseId)?.sha);
  if(changed)throw new SourceBindError('CI_BIND_PROVENANCE_FAILED','Source changed during binding',courses.find(c=>c.id===changed.courseId)?.id);
  const fingerprintInputs=ordered.map(({courseId,repository,sha})=>({courseId,repository,sha})).sort((a,b)=>a.courseId.localeCompare(b.courseId));

@@ -3,8 +3,9 @@ import { lstat, readFile, readdir, realpath, statfs } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { courses } from '../../config/courses.js';
+import { courses, type CourseConfig } from '../../config/courses.js';
 import { authorizedRoots, selected, type SourceSelection } from './sparse-source.js';
+import { courseConfiguration } from './course-source.js';
 export type SourceMetrics={files:number;totalBytes:number;maxFileBytes:number;freeBytes:number};
 const codes=['CI_SOURCE_DISK_LIMIT','CI_SOURCE_FILE_COUNT_LIMIT','CI_SOURCE_MAX_FILE_LIMIT','CI_SOURCE_TOTAL_BYTES_LIMIT','CI_SOURCE_UNSUPPORTED_ENTRY','CI_SOURCE_SELECTION_MISMATCH','CI_SOURCE_PROVENANCE_INVALID','CI_SOURCE_INSPECTION_FAILED','CI_SOURCE_LIMITS_PASSED'] as const;
 class SourceFailure extends Error{}
@@ -68,13 +69,13 @@ export async function assertSourceWorktree(root:string,sha:string,config:SourceS
  };
  await walk(root);if(expected.size)reject('CI_SOURCE_SELECTION_MISMATCH');
 }
-export async function checkSourceLimits(project:string,revisions:unknown,metrics:SourceMetrics):Promise<void>{
+export async function checkSourceLimits(project:string,revisions:unknown,metrics:SourceMetrics,configs: readonly CourseConfig[] = courses):Promise<void>{
  const disk=await statfs(project,{bigint:true});checkFreeSpace(metrics,disk.bavail*disk.bsize);
- if(!Array.isArray(revisions)||revisions.length!==courses.length)reject('CI_SOURCE_PROVENANCE_INVALID');
+ if(!Array.isArray(revisions)||revisions.length!==configs.length)reject('CI_SOURCE_PROVENANCE_INVALID');
  const sources=resolve(project,'../sources');
  if((await lstat(sources)).isSymbolicLink()||await realpath(sources)!==sources)reject('CI_SOURCE_UNSUPPORTED_ENTRY');
- const actual=await readdir(sources);if(actual.length!==courses.length||actual.some(id=>!courses.some(course=>course.id===id)))reject('CI_SOURCE_SELECTION_MISMATCH');
- for(const course of courses){
+ const actual=await readdir(sources);if(actual.length!==configs.length||actual.some(id=>!configs.some(course=>course.id===id)))reject('CI_SOURCE_SELECTION_MISMATCH');
+ for(const course of configs){
   const matches=revisions.filter(value=>value&&typeof value==='object'&&value.courseId===course.id),revision=matches[0];
   if(matches.length!==1||Object.keys(revision).sort().join(',')!=='courseId,repository,root,sha'||revision.repository!==course.repo||revision.root!=='../sources/'+course.id||typeof revision.sha!=='string')reject('CI_SOURCE_PROVENANCE_INVALID');
   await assertSourceWorktree(resolve(sources,course.id),revision.sha,course,metrics);
@@ -83,8 +84,8 @@ export async function checkSourceLimits(project:string,revisions:unknown,metrics
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  const metrics:SourceMetrics={files:0,totalBytes:0,maxFileBytes:0,freeBytes:0};
  (async()=>{
-  if(process.argv.length!==2)reject('CI_SOURCE_INSPECTION_FAILED');
+  if(process.argv.length>3)reject('CI_SOURCE_INSPECTION_FAILED');
   const path=resolve('.local/revisions.json');if((await lstat(path)).size>16384)reject('CI_SOURCE_PROVENANCE_INVALID');
-  await checkSourceLimits(process.cwd(),JSON.parse(await readFile(path,'utf8')),metrics);process.stdout.write(formatSourceDiagnostic(null,metrics));
+  await checkSourceLimits(process.cwd(),JSON.parse(await readFile(path,'utf8')),metrics,process.argv[2] ? [courseConfiguration(process.argv[2])] : courses);process.stdout.write(formatSourceDiagnostic(null,metrics));
  })().catch(error=>{process.stderr.write(formatSourceDiagnostic(error,metrics));process.exitCode=1;});
 }

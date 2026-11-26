@@ -2,6 +2,7 @@ import { appendFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { courses, type CourseConfig } from '../../config/courses.js';
+import { courseConfiguration } from './course-source.js';
 export type SourceSelection=Pick<CourseConfig,'allowedRoots'|'extraFiles'>;
 function fail():never{throw Error('CI_SPARSE_SELECTION_INVALID');}
 export const selected=(path:string,roots:readonly string[])=>roots.some(root=>path===root||path.startsWith(root+'/'));
@@ -19,9 +20,9 @@ export function sparsePatterns(config:SourceSelection):string[]{
  // A root may be a file or directory. Anchored literal patterns preserve both cases.
  return authorizedRoots(config).map(root=>'/'+root.replace(/[!*?\[\]#]/g,'\\$&'));
 }
-export async function writeSparseOutputs(output:string):Promise<void>{
+export async function writeSparseOutputs(output:string, configs: readonly CourseConfig[] = courses):Promise<void>{
  const delimiter='STUDY_HUB_SPARSE_END';
- const lines=courses.map(course=>{
+ const lines=configs.map(course=>{
   const key=course.id.replaceAll('-','_'),patterns=sparsePatterns(course);
   if(!/^[a-z][a-z_0-9]*$/.test(key)||patterns.some(pattern=>pattern===delimiter))fail();
   return key+'<<'+delimiter+'\n'+patterns.join('\n')+'\n'+delimiter+'\n';
@@ -29,5 +30,5 @@ export async function writeSparseOutputs(output:string):Promise<void>{
  await appendFile(output,lines.join(''));
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
- (async()=>{if(process.argv.length!==2||!process.env.GITHUB_OUTPUT)fail();await writeSparseOutputs(process.env.GITHUB_OUTPUT);})().catch(()=>{process.stderr.write('CI_SPARSE_SELECTION_INVALID\n');process.exitCode=1;});
+ (async()=>{if(process.argv.length>3||!process.env.GITHUB_OUTPUT)fail();await writeSparseOutputs(process.env.GITHUB_OUTPUT,process.argv[2] ? [courseConfiguration(process.argv[2])] : courses);})().catch(()=>{process.stderr.write('CI_SPARSE_SELECTION_INVALID\n');process.exitCode=1;});
 }
