@@ -1,6 +1,7 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { build } from 'vite';
 import { fileURLToPath } from "node:url";
 import { buildContent } from "./content/build.js";
 import { writeReport, validateReportPath, type BuildReport } from "./content/report.js";
@@ -17,8 +18,19 @@ async function main() {
     return;
   }
   if (!["content:build", "build", "dev"].includes(command ?? "")) throw new Error("Expected content:build, build, or dev");
-  const { sources, explicitSources, viteArgs } = parseAppArguments(command!, args);
   const appRoot = fileURLToPath(new URL('../', import.meta.url));
+  if (command === 'build' && args.length === 1 && args[0] === '--ui-only') {
+    if (await realpath(process.cwd()) !== await realpath(appRoot)) throw Error('App commands must run in the owned project directory');
+    const output = await validateAppOutput([]);
+    const report = resolve('.reports/app-build.json');
+    await validateReportPath(report, [output]);
+    await build({ root: appRoot, configFile: false, publicDir: false, build: { outDir: output, emptyOutDir: true } });
+    await writeFile(resolve(output, 'catalog.json'), JSON.stringify({ version: 1, courses: [], groups: [], documents: [] }) + '\n');
+    const manifest = await finishAppBuild(output, { createdAt: '', bundleHash: '', sources: [], inputs: [], outputs: [], issues: [] });
+    await writeReport(manifest, report, [output]);
+    return;
+  }
+  const { sources, explicitSources, viteArgs } = parseAppArguments(command!, args);
   if (command !== 'content:build') {
     await validateAppOutput([], resolve(sources));
     if (await realpath(process.cwd()) !== await realpath(appRoot)) throw Error('App commands must run in the owned project directory');

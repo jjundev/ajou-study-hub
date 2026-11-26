@@ -19,12 +19,18 @@ export async function verifyCourseWorker(input: CourseWorkerProofInput): Promise
   const browserDir = await mkdtemp(resolve(generated, 'course-verification-'));
   try {
     await build({ root: project, configFile: false, publicDir: false, logLevel: 'warn', build: { outDir: browserDir } });
-    await cp(outputDir, browserDir, { recursive: true, force: false, errorOnExist: true });
+    for (const name of ['catalog.json', 'content', '_headers', '_redirects', '404.html']) {
+      await cp(resolve(outputDir, name), resolve(browserDir, name), { recursive: true, force: false, errorOnExist: true });
+    }
     const browserManifest = await finishAppBuild(browserDir, manifest);
     const evidence = await verifyActual(snapshot.settingsPath, {
       quiet: true, courseArtifact: { config: verified.config, outputDir: browserDir, manifest: browserManifest },
     });
     if (!evidence.passed || !evidence.documentsChecked || evidence.documentsChecked !== verified.catalog.documents.length) {
+      await writeReport(evidence, resolve(project, '.reports/course-worker', courseId, 'browser-failure.json'), [outputDir], project);
+      const issues = [...new Set(evidence.issues.filter(issue => issue.severity === 'error').map(issue => issue.code))];
+      console.error(JSON.stringify({ code: 'CI_COURSE_BROWSER_CHECKS_FAILED', checked: evidence.documentsChecked,
+        expected: verified.catalog.documents.length, issues, representativeFailures: evidence.representatives.scenarios.filter(scenario => !scenario.passed).length }));
       throw Error('Course browser checks failed');
     }
     const after = await inspectVerifiedCourseInputs(input);

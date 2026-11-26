@@ -1,8 +1,20 @@
 # 자료실 배포 운영
 
+## 과목 Worker 운영 전환
+
+새 전환은 [과목 Worker 전환 작업](https://github.com/jjundev/ajou-study-hub/actions/workflows/study-hub-course-cutover.yml)에서 실행합니다. Cloudflare Workers Free의 정적 자산과 Service Binding을 사용합니다. 운영 허브가 기존 주소에서 공통 UI와 통합 목록을 제공하고, 연결된 과목의 문서를 해당 과목 Worker에 전달합니다.
+
+1. 검증된 공개 배포의 실행 ID, 시도 번호, 운영 카탈로그 SHA-256을 준비합니다. 전환 작업에서 `verify_only`를 선택하면 고정 커밋으로 기준본을 재현하고 해시를 비교합니다.
+2. 재현이 확인되면 자동 게시 변수를 `disabled`로 바꾸고 이미 시작한 게시를 확인합니다. `pilot`을 선택해 생명과학을 먼저 등록합니다. 초기화 중 중단됐다면 작업이 기록한 `course-seed-receipts.json`을 `STUDY_HUB_COURSE_SEED_RETRY`에 기록한 뒤 같은 기준본으로 재실행합니다.
+3. `course-cutover.json`에서 `settings`와 `checkpoints`를 각각 `STUDY_HUB_COURSE_WORKER_SETTINGS`와 `STUDY_HUB_COURSE_WORKER_BASELINES`에 반영합니다. 이어서 `STUDY_HUB_STATIC_WORKER_PROFILE`을 `pilot`으로 맞추고 자동 게시를 켭니다.
+4. `source_repository=jjundev/ajou-life-science`로 갱신을 실행합니다. 운영 주소의 생명과학 자료와 논리회로실험, 전자회로2, 자료구조, 기계학습기초의 대표 자료를 확인합니다. 과목 실행 전후로 생명과학 활성 버전과 허브 활성 버전을 비교합니다.
+5. 같은 순서로 `all` 전환을 실행하고 결과에서 설정과 체크포인트를 반영합니다. 운영 `/_study-hub/routing.json`의 `profile`과 과목 ID를 확인한 뒤 `STUDY_HUB_STATIC_WORKER_PROFILE`을 `all`로 맞추고 자동 게시를 켭니다. 정지 중 누락된 갱신은 과목별로 다시 요청합니다.
+
+각 내부 Worker는 `workers_dev`와 preview를 모두 비활성화합니다. 과목별 새 버전이 공개 응답 검사에 실패하면, 해당 버전이 아직 활성 상태일 때 이전 체크포인트로 복구합니다. 공개 경로는 `content/<과목 ID>/` 아래 원래 주소를 사용합니다. `/catalog.json`을 처리하는 요청과 내부 Worker로 전달되는 자료 요청은 [Workers Free 한도](https://developers.cloudflare.com/workers/platform/limits/)에 포함됩니다.
+
 ## 운영 주소에 수동 공개 게시
 
-운영 주소는 비로그인 요청을 받습니다. 일반 갱신에는 [자동 갱신](automatic-updates.md)을 사용합니다.
+이 절차는 `legacy` 프로필의 통합 번들에 적용합니다. 운영 주소는 비로그인 요청을 받습니다. 일반 갱신에는 [자동 갱신](automatic-updates.md)을 사용합니다.
 수동 배포가 필요하면 기존 Worker `ajou-study-hub`에 게시합니다. 운영 주소 하나를 사용하며 preview,
 커스텀 도메인, zone route가 비활성 상태인지 확인합니다.
 

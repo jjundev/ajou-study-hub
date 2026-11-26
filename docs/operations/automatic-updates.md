@@ -1,21 +1,31 @@
 # 자동 갱신 운영
 
-허브나 다섯 과목 저장소의 `main`에 푸시하면 [GitHub Actions](https://github.com/jjundev/ajou-study-hub/actions/workflows/study-hub-update.yml)가 다섯 과목의 커밋을 고정해 빌드하고 브라우저로 검증합니다. 검증을 통과하면 같은 번들을 기존 공개 Worker에 배포합니다. 게시 후 활성 버전과 로그인 없이 내려받은 파일의 해시를 대조합니다.
+허브나 과목 저장소의 `main`에 푸시하면 운영 프로필에 따라 [GitHub Actions](https://github.com/jjundev/ajou-study-hub/actions/workflows/study-hub-update.yml)가 갱신 대상을 선택합니다. 공개 주소와 자료 링크는 모든 프로필에서 동일합니다.
+
+| 프로필 | 과목 갱신 | 허브 갱신 |
+|---|---|---|
+| `legacy` | 다섯 과목을 함께 검증 및 게시 | 공통 UI와 자료를 함께 게시 |
+| `pilot` | 생명과학만 독립 게시. 나머지 네 과목은 허브에서 제공 | 공통 UI와 허브에 남은 자료를 함께 게시 |
+| `all` | 알림을 보낸 과목 하나만 검증 및 게시 | 공통 UI를 검증해 게시 |
+
+독립 과목 작업은 과목 저장소의 커밋 한 개에서 정적 파일과 목록을 만들고, 브라우저 검증을 통과한 파일만 게시합니다. 기존 공개 주소로 응답을 확인합니다. 검증된 체크포인트와 파일 해시가 같으면 현재 활성 버전을 유지합니다.
 
 ## 설정
 
 - GitHub Actions 변수 `STUDY_HUB_AUTOMATIC_UPDATES`가 정확히 `enabled`일 때 게시합니다. 다른 값이거나 수동 실행에서 `mode:verify`를 선택하면 검증까지만 합니다.
+- `STUDY_HUB_STATIC_WORKER_PROFILE`은 현재 운영 허브와 맞춰 등록합니다. 값이 없으면 `legacy`입니다. 새 단계는 [운영 전환 절차](deployment.md#과목-worker-운영-전환)로 적용합니다.
+- `STUDY_HUB_COURSE_WORKER_SETTINGS`의 `workerIds`와 `STUDY_HUB_COURSE_WORKER_BASELINES`에는 전환 작업이 검증한 Worker ID와 초기 체크포인트를 사용합니다.
 - `STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS`에는 [수동 공개 게시](deployment.md#운영-주소에-수동-공개-게시)와 같은 JSON을 넣습니다. 계정과 Worker ID, 운영 주소를 확인하고 설정을 등록합니다.
 - Actions Secrets의 `CLOUDFLARE_READ_TOKEN`과 `CLOUDFLARE_API_TOKEN`은 공개 Worker의 읽기와 업로드에 쓰입니다. 배포와 별도 토큰 갱신에서 사용하며, 동일 입력 판정 단계에는 읽기 토큰만 전달합니다.
 - 과목 알림은 각 저장소의 `.github/workflows/notify-study-hub.yml`이 담당합니다. `npm run ci:notifiers`로 템플릿을 만들며, 기존 Dispatcher App의 `STUDY_HUB_DISPATCH_APP_ID`와 `STUDY_HUB_DISPATCH_PRIVATE_KEY`를 사용합니다.
 
 ## 실행 확인과 정지
 
-Actions 실행 요약에서 `published-public-verified`, 배포 ID와 버전 ID, 카탈로그 해시와 검사한 파일 수를 확인합니다. 로컬에서 수동 배포가 필요하면 [배포 운영 안내](deployment.md#운영-주소에-수동-공개-게시)를 따릅니다.
+독립 과목 실행의 `course-verification-<과목 ID>-<시도 번호>` 아티팩트에서 해당 원본 커밋, 검증 수, 게시 결과를 확인합니다. `rolled-back`은 이전 버전으로 복구한 결과입니다. `outcome-unknown`이면 후보와 활성 버전을 확인한 후 다음 게시를 결정합니다. 통합 배포에서는 `published-public-verified`와 배포 ID, 버전 ID, 카탈로그 해시를 확인합니다. 로컬에서 수동 배포가 필요하면 [배포 운영 안내](deployment.md#운영-주소에-수동-공개-게시)를 따릅니다.
 
 자동 게시를 멈추려면 `STUDY_HUB_AUTOMATIC_UPDATES`를 `disabled`로 바꾸고 실행 중인 배포가 있는지 확인합니다. `upload-started-outcome-unknown` 또는 `uploaded-postcheck-pending`이면 재실행 전에 현재 Worker 버전과 실행 요약의 이전 버전을 대조합니다. 게시 후 운영 응답 확인에 실패한 경우 [수동 복구 절차](deployment.md#운영-주소에-수동-공개-게시)를 따릅니다.
 
-## 게시 입력이 같은 과목 알림 생략
+## 통합 배포에서 게시 입력이 같은 과목 알림 생략
 
 `STUDY_HUB_UNCHANGED_DEPLOYMENTS`의 기본 동작은 전체 검증 및 게시입니다. `observe`와 `skip`에서는 공개 검증이 끝난 배포의 입력 해시와 배포·버전 ID를 Actions 아티팩트에 7일 동안 보관합니다. 과목 알림을 받으면 다섯 과목의 고정 체크아웃을 검사한 뒤 이 기록을 현재 운영 Worker와 대조합니다. 입력이나 운영 상태가 달라졌거나 기록을 확인할 수 없으면 전체 검증 및 게시를 진행합니다. 허브 푸시, 과목 지정 없는 수동 실행, 토큰 갱신 후 실행, `verify` 실행, Actions 재실행에는 각 실행의 전체 검증 절차를 적용합니다.
 
@@ -26,7 +36,7 @@ Actions 실행 요약에서 `published-public-verified`, 배포 ID와 버전 ID,
 
 생략을 끄려면 `STUDY_HUB_UNCHANGED_DEPLOYMENTS`를 지웁니다.
 
-## 변경 과목 브라우저 검증 측정
+## 통합 배포에서 변경 과목 브라우저 검증 측정
 
 `STUDY_HUB_COURSE_VERIFICATION=observe`를 설정하고 전체 공개 배포를 한 번 성공시키면 체크포인트에 과목별 입력 해시가 기록됩니다. 그다음 일부 과목의 게시 입력이 바뀌면 현재 운영 배포 ID, 버전 ID, 허브 커밋이 체크포인트와 일치하는 경우에 한해 같은 번들로 두 경로를 실행합니다. 알림 저장소 이름과 관계없이 다섯 과목의 입력을 모두 비교합니다.
 

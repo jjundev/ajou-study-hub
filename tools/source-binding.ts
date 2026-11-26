@@ -30,12 +30,12 @@ export async function inspectBoundSources(project:string,path:string,configs: Co
 }
 export type SourceBinding=Awaited<ReturnType<typeof inspectBoundSources>>['binding'];
 /** Both checkpoints take fresh Git batches; no per-file Git subprocesses. */
-export async function assertCurrentSources(project:string,binding:SourceBinding,manifest:BuildReport):Promise<void>{
+export async function assertCurrentSources(project:string,binding:SourceBinding,manifest:BuildReport,configs: readonly CourseConfig[] = courses):Promise<void>{
  if(!binding||binding.version!==1||typeof binding.settingsPath!=='string')throw Error('Source settings identity missing; reverify required');
- const current=await inspectBoundSources(project,binding.settingsPath,binding.configs);
+ const current=await inspectBoundSources(project,binding.settingsPath,configs);
  if(!same(current.binding,binding)||!same(current.snapshot.provenance,manifest.sources))throw Error('Source settings/selection/provenance changed; reverify required');
  for(const input of manifest.inputs){if(hash(await current.snapshot.readFile(input.courseId,input.path))!==input.sha256)throw Error('Source input changed; reverify required');}
  await verifySnapshot(current.snapshot);
- const after=await inspectBoundSources(project,binding.settingsPath,binding.configs);
+ const after=await inspectBoundSources(project,binding.settingsPath,configs);
  if(!same(after.binding,binding)||!same(after.snapshot.provenance,manifest.sources))throw Error('Source tracking/settings changed during release; reverify required');
 }

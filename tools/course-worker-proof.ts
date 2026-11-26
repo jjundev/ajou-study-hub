@@ -60,7 +60,7 @@ export async function inspectVerifiedCourseInputs(input: CourseWorkerProofInput)
       manifest.sources[0].dirty || manifest.inputs.some(file => file.courseId !== courseId)) {
     throw Error('Course artifact has wrong source provenance');
   }
-  await assertCurrentSources(project, binding, manifest);
+  await assertCurrentSources(project, binding, manifest, [config]);
   return { ...await inspectCourseArtifact(outputDir, courseId, manifest), config, revision, binding };
 }
 

@@ -36,7 +36,9 @@ export async function serveHubRequest(request: Request, env: HubWorkerEnv): Prom
     return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
   }
   const head = request.method === 'HEAD';
-  if (url.pathname === routingPath) return Response.json(routingDescriptor(profile), { headers: noStore });
+  if (url.pathname === routingPath) {
+    return new Response(head ? null : JSON.stringify(routingDescriptor(profile)), { headers: { ...noStore, 'content-type': 'application/json' } });
+  }
   if (url.pathname === '/catalog.json' && profile !== 'legacy') {
     const staticCatalog = profile === 'pilot' ? readCatalog(env.ASSETS, url) : undefined;
     const slices = await Promise.allSettled(courseIds.map(async id => {

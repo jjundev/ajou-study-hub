@@ -1,0 +1,226 @@
+name: Cut over study hub course Workers
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        options: [pilot, all]
+        required: true
+      baseline_run:
+        type: string
+        description: Successful public release run ID
+        required: true
+      baseline_attempt:
+        type: string
+        required: true
+        default: '1'
+      baseline_catalog_hash:
+        type: string
+        description: SHA-256 of the exact published legacy catalog
+        required: true
+      verify_only:
+        type: boolean
+        default: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  cutover:
+    if: >-
+      github.repository == 'jjundev/ajou-study-hub' &&
+      github.ref == 'refs/heads/main' &&
+      github.workflow_ref == 'jjundev/ajou-study-hub/.github/workflows/study-hub-course-cutover.yml@refs/heads/main' &&
+      github.workflow_sha == github.sha &&
+      (inputs.verify_only || vars.STUDY_HUB_AUTOMATIC_UPDATES == 'disabled')
+    concurrency:
+      group: study-hub-production
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    env:
+      BASELINE_RUN: ${{ inputs.baseline_run }}
+      BASELINE_ATTEMPT: ${{ inputs.baseline_attempt }}
+      BASELINE_CATALOG_HASH: ${{ inputs.baseline_catalog_hash }}
+      CUTOVER_PROFILE: ${{ inputs.profile }}
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+          package-manager-cache: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: jjundev/ajou-study-hub
+          ref: ${{ github.sha }}
+          path: app
+          persist-credentials: false
+          set-safe-directory: false
+      - run: node tools/ci/source-git-environment.ts
+      - run: node tools/ci/process-boundary.ts capture "$RUNNER_TEMP/study-hub-cutover-trusted.json"
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Read metadata from the verified legacy run
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "$BASELINE_RUN" =~ ^[0-9]{1,15}$ || ! "$BASELINE_ATTEMPT" =~ ^[1-9][0-9]{0,4}$ ]]; then exit 1; fi
+          mkdir -p .local/cutover
+          gh api "repos/jjundev/ajou-study-hub/actions/runs/$BASELINE_RUN" > .local/cutover/run.json
+          metadata=verify-metadata
+          if [[ "$BASELINE_ATTEMPT" != 1 ]]; then metadata="verify-metadata-$BASELINE_ATTEMPT"; fi
+          gh run download "$BASELINE_RUN" -R jjundev/ajou-study-hub -n "$metadata" -d .local/cutover
+          gh run download "$BASELINE_RUN" -R jjundev/ajou-study-hub -n "public-checkpoint-$BASELINE_ATTEMPT" -d .local/cutover
+          node --import tsx tools/ci/prepare-course-cutover.ts
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: jjundev/ajou-study-hub
+          ref: ${{ steps.baseline.outputs.app_sha }}
+          path: baseline
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Derive exact sparse selections from the pinned app
+        id: sparse
+        run: |
+          (cd ../baseline && npm ci --ignore-scripts --no-audit --no-fund && node --import tsx tools/ci/sparse-source.ts)
+      - name: Create Reader for the five approved baseline checkouts
+        id: reader
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.STUDY_HUB_READER_APP_ID }}
+          private-key: ${{ secrets.STUDY_HUB_READER_PRIVATE_KEY }}
+          owner: jjundev
+          repositories: ajou-nonhoesil,ajou-life-science,ajou-electronic-circuits-2,ajou-jagual,ajou-ml-basics
+          permission-contents: read
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: jjundev/ajou-nonhoesil
+          ref: ${{ steps.baseline.outputs.logic_lab }}
+          path: sources/logic-lab
+          token: ${{ steps.reader.outputs.token }}
+          persist-credentials: false
+          set-safe-directory: false
+          show-progress: false
+          sparse-checkout: ${{ steps.sparse.outputs.logic_lab }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: jjundev/ajou-life-science
+          ref: ${{ steps.baseline.outputs.life_science }}
+          path: sources/life-science
+          token: ${{ steps.reader.outputs.token }}
+          persist-credentials: false
+          set-safe-directory: false
+          show-progress: false
+          sparse-checkout: ${{ steps.sparse.outputs.life_science }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: jjundev/ajou-electronic-circuits-2
+          ref: ${{ steps.baseline.outputs.circuits_2 }}
+          path: sources/circuits-2
+          token: ${{ steps.reader.outputs.token }}
+          persist-credentials: false
+          set-safe-directory: false
+          show-progress: false
+          sparse-checkout: ${{ steps.sparse.outputs.circuits_2 }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: jjundev/ajou-jagual
+          ref: ${{ steps.baseline.outputs.data_structures }}
+          path: sources/data-structures
+          token: ${{ steps.reader.outputs.token }}
+          persist-credentials: false
+          set-safe-directory: false
+          show-progress: false
+          sparse-checkout: ${{ steps.sparse.outputs.data_structures }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: jjundev/ajou-ml-basics
+          ref: ${{ steps.baseline.outputs.ml_basics }}
+          path: sources/ml-basics
+          token: ${{ steps.reader.outputs.token }}
+          persist-credentials: false
+          set-safe-directory: false
+          show-progress: false
+          sparse-checkout: ${{ steps.sparse.outputs.ml_basics }}
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
+      - name: Hydrate pinned Git metadata
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        run: node --import tsx tools/ci/hydrate-source-status.ts
+      - name: Revoke Reader
+        if: ${{ always() && steps.reader.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          try {
+            const response = await fetch('https://api.github.com/installation/token', {
+              method: 'DELETE', redirect: 'error', signal: AbortSignal.timeout(30_000),
+              headers: { Authorization: 'Bearer ' + process.env.GH_TOKEN, Accept: 'application/vnd.github+json' },
+            });
+            if (response.status !== 204) throw Error();
+          } catch { console.error('CI_READER_REVOCATION_FAILED'); process.exitCode = 1; }
+          NODE
+      - name: Rebuild and match the verified baseline bytes
+        env:
+          BASELINE_APP_SHA: ${{ steps.baseline.outputs.app_sha }}
+        run: |
+          node --import tsx tools/ci/source-limits.ts
+          cd ../baseline
+          mkdir -p .local
+          cp ../app/.local/revisions.json .local/revisions.json
+          node --import tsx tools/ci/sources-cli.ts bind "$BASELINE_APP_SHA" .local/revisions.json >/dev/null
+          npm ci --no-audit --no-fund
+          npm run build -- --sources .local/ci-sources.json >/dev/null || { echo CI_CUTOVER_BASELINE_BUILD_FAILED; exit 1; }
+          cd ../app
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const get = async path => JSON.parse(await readFile(path, 'utf8'));
+          const manifest = await get('../baseline/.reports/app-build.json');
+          const receipt = await get('.local/cutover/receipt.json');
+          if (manifest.bundleHash !== receipt.bundleHash || manifest.outputs.find(file => file.path === 'catalog.json')?.sha256 !== receipt.catalogHash) {
+            console.error('CI_CUTOVER_BASELINE_HASH_MISMATCH');
+            process.exitCode = 1;
+          } else {
+            console.log('CI_CUTOVER_BASELINE_HASHES_MATCH');
+          }
+          NODE
+      - run: npm ci --no-audit --no-fund
+      - run: node tools/ci/process-boundary.ts check "$RUNNER_TEMP/study-hub-cutover-trusted.json"
+      - name: Seed and verify the selected profile through the existing public URL
+        if: ${{ !inputs.verify_only }}
+        env:
+          STUDY_HUB_AUTOMATIC_UPDATES: ${{ vars.STUDY_HUB_AUTOMATIC_UPDATES }}
+          STUDY_HUB_STATIC_WORKER_PROFILE: ${{ vars.STUDY_HUB_STATIC_WORKER_PROFILE }}
+          STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS: ${{ vars.STUDY_HUB_PUBLIC_DEPLOYMENT_SETTINGS }}
+          STUDY_HUB_COURSE_WORKER_SETTINGS: ${{ vars.STUDY_HUB_COURSE_WORKER_SETTINGS }}
+          STUDY_HUB_COURSE_WORKER_BASELINES: ${{ vars.STUDY_HUB_COURSE_WORKER_BASELINES }}
+          COURSE_SEED_RETRY: ${{ vars.STUDY_HUB_COURSE_SEED_RETRY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_READ_TOKEN: ${{ secrets.CLOUDFLARE_READ_TOKEN }}
+        run: node --import tsx tools/deploy/course-worker-cutover.ts "$CUTOVER_PROFILE"
+      - if: ${{ always() && !inputs.verify_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: course-cutover-${{ github.run_attempt }}
+          path: |
+            app/.reports/course-seed-receipts.json
+            app/.reports/course-cutover.json
+          retention-days: 90
+          if-no-files-found: ignore
