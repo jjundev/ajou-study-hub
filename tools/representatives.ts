@@ -149,11 +149,14 @@ export async function verifyReviewDownloads(
 }
 
 export async function verifyRepresentatives(
-  baseUrl: string, catalog: Catalog, outputs: readonly { path: string; sha256: string }[], log = console.log,
+  baseUrl: string, catalog: Catalog, outputs: readonly { path: string; sha256: string }[], log = console.log, course?: string,
 ) {
   const scenarios: Scenario[] = [];
   const observations: Observation[] = [];
   const engines = { chromium, firefox, webkit };
+  const paths = representativePaths.filter(([id]) => !course || course === id);
+  const downloads = !course || course === reviewDownloadCase.courseId;
+  const expected = course ? (paths.length + Number(downloads)) * representativeBrowserNames.length * representativeWidths.length : representativeScenarioCount;
   for (const browserName of representativeBrowserNames) {
     const browser = await engines[browserName].launch();
     try {
@@ -162,7 +165,7 @@ export async function verifyRepresentatives(
           viewport: { width, height: 900 },
         });
         try {
-          for (const [courseId, sourcePath] of representativePaths) {
+          for (const [courseId, sourcePath] of paths) {
             const doc = catalog.documents.find(
               (d) => d.courseId === courseId && d.sourcePath === sourcePath,
             );
@@ -393,6 +396,7 @@ export async function verifyRepresentatives(
                       "linear-map slider updates determinant readout",
                     );
                     await settle();
+                    if (!course) {
                     await page.goto(baseUrl + "/");
                     const sameDate = await page.evaluate(() =>
                       Object.keys(localStorage)
@@ -412,6 +416,7 @@ export async function verifyRepresentatives(
                     scenario.checks.push(
                       "1012 notes from two courses retain distinct native storage keys",
                     );
+                    }
                   }
                   if (courseId === "circuits-2") {
                     const dockedProblem = page.locator("#toggle-prob");
@@ -447,6 +452,7 @@ export async function verifyRepresentatives(
               );
             }
           }
+          if (!downloads) continue;
           const downloadScenario: Extract<Scenario, { caseId: string }> = {
             caseId: reviewDownloadCase.id, browser: browserName, width, downloads: [], passed: false, checks: [],
           };
@@ -471,7 +477,7 @@ export async function verifyRepresentatives(
     }
   }
   return {
-    complete: scenarios.length === representativeScenarioCount && scenarios.every((s) => s.passed),
+    complete: scenarios.length === expected && scenarios.every((s) => s.passed),
     scenarios,
     observations,
   };

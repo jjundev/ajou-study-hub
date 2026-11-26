@@ -19,17 +19,20 @@ import {
 import { auditWorkbookFigures } from "./runtime-workbooks.js";
 import { verifyRepresentatives } from "./representatives.js";
 import type { Catalog } from "../src/content/model.js";
-import { courses } from "../config/courses.js";
+import { courses, type CourseConfig } from "../config/courses.js";
 import { selectCourseRelease, type CourseRelease } from "./course-release.js";
 
 export async function verifyActual(
   sourcesPath: string,
-  options: { reportPath?: string; testProjectRoot?: string; observeCourses?: readonly string[]; courseRelease?: CourseRelease; quiet?: boolean } = {},
+  options: { reportPath?: string; testProjectRoot?: string; observeCourses?: readonly string[]; courseRelease?: CourseRelease; quiet?: boolean; courseArtifact?: { config: CourseConfig; outputDir: string; manifest: BuildReport } } = {},
 ) {
   const startedAt = Date.now();
   const started = performance.now();
   const log = options.quiet ? () => {} : console.log;
   const projectRoot = await verificationProject(options.testProjectRoot);
+  const course = options.courseArtifact;
+  const bundle = course?.outputDir ?? resolve(projectRoot, "dist");
+  const configs = course ? [course.config] : courses;
   const canonicalProof = resolve(projectRoot, ".reports/verification.json");
   const observed = options.observeCourses;
   if (observed && (options.courseRelease || options.reportPath !== undefined || !observed.length ||
@@ -44,9 +47,9 @@ export async function verifyActual(
     deploymentEligible: false,
     status: "running",
   };
-  if (!observed)
+  if (!observed && !course)
     await writeReport(running, canonicalProof, [resolve(projectRoot, "dist")], projectRoot);
-  const sourceIdentity = await readSourceSettings(projectRoot, sourcesPath);
+  const sourceIdentity = await readSourceSettings(projectRoot, sourcesPath, configs);
   const settings = sourceIdentity.settings;
   const reportPath = resolve(
     projectRoot,
@@ -57,21 +60,22 @@ export async function verifyActual(
     ...Object.values(settings.roots),
   ];
   await validateReportPath(reportPath, exclusions, projectRoot);
-  if (observed || reportPath !== canonicalProof)
+  if (!course && (observed || reportPath !== canonicalProof))
     await writeReport(running, reportPath, exclusions, projectRoot);
   // Fail closed even when the source checkout cannot be inspected.
-  const { snapshot, binding: sourceBinding } = await inspectBoundSources(projectRoot, sourcesPath);
+  const { snapshot, binding: sourceBinding } = await inspectBoundSources(projectRoot, sourcesPath, configs);
   if (sourceBinding.settingsSha256 !== sourceIdentity.settingsSha256 || sourceBinding.settingsPath !== sourceIdentity.settingsPath)
     throw Error("Source settings changed during verification");
-  const manifest = JSON.parse(
+  const manifest = course?.manifest ?? JSON.parse(
     await readFile(resolve(projectRoot, ".reports/app-build.json"), "utf8"),
   ) as BuildReport;
   const courseRelease = selectCourseRelease(options.courseRelease, manifest.outputs);
   log(`Checking ${manifest.outputs.length} app bundle outputs`);
   await assertCurrentBundle(
-    resolve(projectRoot, "dist"),
+    bundle,
     manifest,
     projectRoot,
+    course ? bundle : undefined,
   );
   if (JSON.stringify(manifest.sources) !== JSON.stringify(snapshot.provenance))
     throw Error(
@@ -88,7 +92,7 @@ export async function verifyActual(
       throw Error("Changed source input: " + input.courseId + "/" + input.path);
   }
   const catalog = JSON.parse(
-    await readFile(resolve(projectRoot, "dist/catalog.json"), "utf8"),
+    await readFile(resolve(bundle, "catalog.json"), "utf8"),
   ) as Catalog;
   const currentCatalog = await buildCatalog(snapshot);
   if (JSON.stringify(currentCatalog.groups) !== JSON.stringify(catalog.groups))
@@ -115,7 +119,7 @@ export async function verifyActual(
   const browserDocuments = scopedCourses
     ? catalog.documents.filter(doc => scopedCourses.includes(doc.courseId))
     : catalog.documents;
-  const server = await serveManifest(resolve(projectRoot, "dist"), manifest);
+  const server = await serveManifest(bundle, manifest);
   const observations: Observation[] = [];
   const documents: LoadEvidence[] = [];
   let checked = 0;
@@ -188,13 +192,13 @@ export async function verifyActual(
     );
     if (failures.size || fallbackDocuments.length) {
       const baseline = await serveManifest(
-        resolve(projectRoot, "dist"),
+        bundle,
         manifest,
         async (p) => {
           const match = /^content\/([^/]+)\/(.+)$/.exec(p);
           return match
             ? snapshot.readFile(match[1]!, match[2]!)
-            : readFile(resolve(projectRoot, "dist", p));
+            : readFile(resolve(bundle, p));
         },
       );
       const browser = await chromium.launch();
@@ -281,15 +285,17 @@ export async function verifyActual(
       catalog,
       manifest.outputs,
       log,
+      course?.config.id,
     );
     observations.push(...representatives.observations);
     await assertCurrentBundle(
-      resolve(projectRoot, "dist"),
+      bundle,
       manifest,
       projectRoot,
+      course ? bundle : undefined,
     );
     await verifySnapshot(snapshot);
-    const after = await inspectBoundSources(projectRoot, sourcesPath);
+    const after = await inspectBoundSources(projectRoot, sourcesPath, configs);
     if (JSON.stringify(after.snapshot.provenance) !== JSON.stringify(snapshot.provenance) || JSON.stringify(after.binding) !== JSON.stringify(sourceBinding))
       throw Error("Source tracking/settings changed during verification");
     const issues = observations.map((o) => {
@@ -340,13 +346,13 @@ export async function verifyActual(
         inputCount: manifest.inputs.length,
         outputCount: manifest.outputs.length,
       },
-      deploymentEligible: passed && !observed && !options.testProjectRoot,
+      deploymentEligible: passed && !course && !observed && !options.testProjectRoot,
       representatives,
       dynamicAssets,
       exceptions,
       fontFallbackChecks,
     };
-    await writeReport(result, reportPath, exclusions, projectRoot);
+    if (!course) await writeReport(result, reportPath, exclusions, projectRoot);
     log(
       JSON.stringify({
         checked,

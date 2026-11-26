@@ -10,10 +10,13 @@ export async function assertCurrentBundle(
   root: string,
   report: BuildReport,
   projectRoot = process.cwd(),
+  verificationDirectory?: string,
 ): Promise<void> {
   const canonical = await realpath(root);
   if ((await lstat(root)).isSymbolicLink()) throw Error("Symlink bundle root");
-  if (canonical !== resolve(await realpath(projectRoot), "dist"))
+  const project = await realpath(projectRoot);
+  if (canonical !== (verificationDirectory ?? resolve(project, "dist")) ||
+      (verificationDirectory && !relative(resolve(project, '.generated'), canonical).match(/^course-verification-[a-zA-Z0-9]+$/)))
     throw Error("Verification requires owned dist");
   root=canonical;
   const paths = new Set<string>();
